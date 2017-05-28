@@ -17,7 +17,7 @@ uses
 var aModel: TSQLModel;
     aClient: TSQLHttpClientWebsockets; // Change from TSQLHttpClient ---to---> TSQLHttpClientWebsockets;
     aPerson: TPerson;
-    aID: integer;
+    aID,i: integer;
     newID:integer;
 begin
   aModel := DataModel;
@@ -40,43 +40,66 @@ begin
       //aClient.Retrieve()
       //aClient.Refresh()
 
-
       {**************** delte *****************}
-      aClient.Delete(TPerson,4);
+      //aClient.Delete(TPerson,4);
+
+
 
       {**************** retrieve *****************}
-      aClient.Retrieve(100,aPerson,true);
-      if aPerson.GetID>0 then
+      for i := 1 to 1000 do
+        begin
+
+            //aPerson.IDValue:=i;
+           // aClient.Retrieve(i,aPerson,true);
+            aPerson:=TPerson.Create;
+
+            if aClient.Retrieve(i,aPerson) then
+            begin
+              Writeln('Retrive Person Name:'+aPerson.Name);
+              Writeln('update name to--> : abcsoft update ',i);
+              aPerson.Name:='abcsoft  update '+Int32ToUtf8(i);
+
+              aClient.Update(aPerson,[]);
+            end else
+            begin
+                {**************** add new *****************}
+                writeln('Add a new TPerson');
+                //aPerson := TPerson.Create;
+                try
+                  Randomize;
+                  newid:=i;//Random(10000);
+                  aPerson.IDValue:=newid;
+                  aPerson.Name := 'Name'+Int32ToUtf8(newid);
+                  aID := aClient.Add(aPerson,true,true);
+
+                finally
+                 // aPerson.Free;
+                end;
+
+            end;
+
+
+
+        end;
+
+      {
+      aClient.Retrieve(7,aPerson,true);
+      if aPerson.ID>0 then
       begin
         Writeln('Retrive Person Name:'+aPerson.Name);
-        Writeln('update name to--> : abcsoft');
-        aPerson.Name:='abcsoft';
+        Writeln('update name to--> : abcsoft2');
+        aPerson.Name:='abcsoft2';
 
         aClient.Update(aPerson,[]);
       end;
 
+      aPerson.Free;
+      }
+
+
+
       //writeln(' id=',aPerson.GetID);
 
-      {**************** add new *****************}
-      writeln('Add a new TPerson');
-      aPerson := TPerson.Create;
-      try
-        Randomize;
-        newid:=Random(10000);
-        aPerson.IDValue:=newid;
-        aPerson.Name := 'Name'+Int32ToUtf8(newid);
-        aID := aClient.Add(aPerson,true,true);
-
-      finally
-        aPerson.Free;
-      end;
-      writeln('Added TPerson.ID=',aID);
-      aPerson := TPerson.Create(aClient,aID);
-      try
-        writeln('Name read for ID=',aPerson.ID,' from DB = "',aPerson.Name,'"');
-      finally
-        aPerson.Free;
-      end;
 
 
     finally
