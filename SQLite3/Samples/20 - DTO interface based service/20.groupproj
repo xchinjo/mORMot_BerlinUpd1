@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{2120831A-1B3E-4739-A826-39A784733DFE}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="Project20Client.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Project20ServerInMemory.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="Project20Client">
+        <MSBuild Projects="Project20Client.dproj"/>
+    </Target>
+    <Target Name="Project20Client:Clean">
+        <MSBuild Projects="Project20Client.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Project20Client:Make">
+        <MSBuild Projects="Project20Client.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Project20ServerInMemory">
+        <MSBuild Projects="Project20ServerInMemory.dproj"/>
+    </Target>
+    <Target Name="Project20ServerInMemory:Clean">
+        <MSBuild Projects="Project20ServerInMemory.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Project20ServerInMemory:Make">
+        <MSBuild Projects="Project20ServerInMemory.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="Project20Client;Project20ServerInMemory"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="Project20Client:Clean;Project20ServerInMemory:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="Project20Client:Make;Project20ServerInMemory:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

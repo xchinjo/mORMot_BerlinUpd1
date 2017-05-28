@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{4804F489-3612-4990-AC42-4F2C68D4760B}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="Project21HttpClient.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Project21HttpServer.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="Project21HttpClient">
+        <MSBuild Projects="Project21HttpClient.dproj"/>
+    </Target>
+    <Target Name="Project21HttpClient:Clean">
+        <MSBuild Projects="Project21HttpClient.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Project21HttpClient:Make">
+        <MSBuild Projects="Project21HttpClient.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Project21HttpServer">
+        <MSBuild Projects="Project21HttpServer.dproj"/>
+    </Target>
+    <Target Name="Project21HttpServer:Clean">
+        <MSBuild Projects="Project21HttpServer.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Project21HttpServer:Make">
+        <MSBuild Projects="Project21HttpServer.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="Project21HttpClient;Project21HttpServer"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="Project21HttpClient:Clean;Project21HttpServer:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="Project21HttpClient:Make;Project21HttpServer:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

@@ -1,4 +1,7 @@
 /// minimal REST client for a list of Persons from RESTserver.exe
+// ********************* ABCSoft Co.,Ltd. (http://www.abcsoft.co.th) ****************************//
+//  Sample Work on Original mORMot CRUD                                                          //
+//***********************************************************************************************//
 program RESTclient;
 
 {$APPTYPE CONSOLE}
@@ -19,12 +22,41 @@ begin
   try
     aClient := TSQLHttpClientWinHTTP.Create('localhost',SERVER_PORT,aModel);
     try
+
+      //aClient.Delete()
+      //aClient.Update()
+      //aClient.Retrieve()
+      //aClient.Refresh()
+
+
+
+
+
+
+      {**************** delte *****************}
+      aClient.Delete(TPerson,4);
+
+      {**************** retrieve *****************}
+      aClient.Retrieve(100,aPerson,true);
+      if aPerson.GetID>0 then
+      begin
+        Writeln('Retrive Person Name:'+aPerson.Name);
+        Writeln('update name to--> : abcsoft');
+        aPerson.Name:='abcsoft';
+
+        aClient.Update(aPerson,[]);
+      end;
+
+      //writeln(' id=',aPerson.GetID);
+
+      {**************** add new *****************}
       writeln('Add a new TPerson');
       aPerson := TPerson.Create;
       try
         Randomize;
         aPerson.Name := 'Name'+Int32ToUtf8(Random(10000));
         aID := aClient.Add(aPerson,true);
+
       finally
         aPerson.Free;
       end;
@@ -35,6 +67,9 @@ begin
       finally
         aPerson.Free;
       end;
+
+
+
     finally
       aClient.Free;
     end;
