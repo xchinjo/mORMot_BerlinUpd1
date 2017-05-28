@@ -13,24 +13,31 @@ uses
   mORMotHttpClient,    // HTTP client to a mORMot RESTful server
   RESTModel;           // data model unit, shared between server and client
 
+
 var aModel: TSQLModel;
-    aClient: TSQLHttpClient;
+    aClient: TSQLHttpClientWebsockets; // Change from TSQLHttpClient ---to---> TSQLHttpClientWebsockets;
     aPerson: TPerson;
     aID: integer;
 begin
   aModel := DataModel;
   try
-    aClient := TSQLHttpClientWinHTTP.Create('localhost',SERVER_PORT,aModel);
+    //aClient := TSQLHttpClientWinHTTP.Create('localhost',SERVER_PORT,aModel);
+    aClient := TSQLHttpClientWebsockets.Create('localhost',SERVER_PORT,aModel);  // Change from TSQLHttpClient ---to---> TSQLHttpClientWebsockets;
+
+      if not aClient.ServerTimeStampSynchronize then
+      begin
+       // ShowLastClientError(fClient,'Please run Project16ServerHttp.exe');
+       // Close;
+        exit;
+      end;
+
+
     try
 
       //aClient.Delete()
       //aClient.Update()
       //aClient.Retrieve()
       //aClient.Refresh()
-
-
-
-
 
 
       {**************** delte *****************}
