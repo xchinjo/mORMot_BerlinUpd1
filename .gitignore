@@ -80,4 +80,3 @@ __recovery/
 _FOSSIL_
 .svn/
 # SourceCodeRep artifact
-*.txt
