@@ -9,6 +9,9 @@
         <Projects Include="RESTserver.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="fmxClient\fmxClient.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -35,14 +38,23 @@
     <Target Name="RESTserver:Make">
         <MSBuild Projects="RESTserver.dproj" Targets="Make"/>
     </Target>
+    <Target Name="fmxClient">
+        <MSBuild Projects="fmxClient\fmxClient.dproj"/>
+    </Target>
+    <Target Name="fmxClient:Clean">
+        <MSBuild Projects="fmxClient\fmxClient.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="fmxClient:Make">
+        <MSBuild Projects="fmxClient\fmxClient.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="RESTclient;RESTserver"/>
+        <CallTarget Targets="RESTclient;RESTserver;fmxClient"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="RESTclient:Clean;RESTserver:Clean"/>
+        <CallTarget Targets="RESTclient:Clean;RESTserver:Clean;fmxClient:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="RESTclient:Make;RESTserver:Make"/>
+        <CallTarget Targets="RESTclient:Make;RESTserver:Make;fmxClient:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>
