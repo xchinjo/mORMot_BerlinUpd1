@@ -1,9 +1,9 @@
 object frmMain: TfrmMain
   Left = 198
   Top = 124
-  Width = 418
-  Height = 240
   Caption = 'SynRestDataset Demo'
+  ClientHeight = 201
+  ClientWidth = 402
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText

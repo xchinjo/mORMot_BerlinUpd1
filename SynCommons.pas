@@ -63994,3 +63994,4 @@ finalization
   DeleteCriticalSection(GlobalCriticalSection);
   //writeln('TDynArrayHashedCollisionCount=',TDynArrayHashedCollisionCount); readln;
 end.
+

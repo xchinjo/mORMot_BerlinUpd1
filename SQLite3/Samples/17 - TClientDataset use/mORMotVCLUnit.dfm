@@ -1,9 +1,9 @@
 object Form1: TForm1
   Left = 192
   Top = 124
-  Width = 754
-  Height = 419
   Caption = 'Form1'
+  ClientHeight = 380
+  ClientWidth = 738
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
@@ -20,7 +20,7 @@ object Form1: TForm1
     Left = 0
     Top = 41
     Width = 738
-    Height = 340
+    Height = 339
     Align = alClient
     DataSource = ds1
     TabOrder = 0
@@ -67,7 +67,6 @@ object Form1: TForm1
       Height = 21
       Style = csDropDownList
       DropDownCount = 10
-      ItemHeight = 13
       ItemIndex = 0
       TabOrder = 1
       Text = 'JSON direct'

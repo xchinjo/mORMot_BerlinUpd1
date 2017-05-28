@@ -66,7 +66,7 @@ object Form1: TForm1
     object Label1: TLabel
       Left = 7
       Top = 4
-      Width = 56
+      Width = 55
       Height = 13
       Caption = 'About the'
       Font.Charset = DEFAULT_CHARSET
@@ -79,7 +79,7 @@ object Form1: TForm1
     object DBLabel2: TDBText
       Left = 67
       Top = 4
-      Width = 56
+      Width = 55
       Height = 13
       AutoSize = True
       DataField = 'Common_Name'
