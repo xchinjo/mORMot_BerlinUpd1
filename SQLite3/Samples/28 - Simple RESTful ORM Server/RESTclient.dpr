@@ -18,6 +18,7 @@ var aModel: TSQLModel;
     aClient: TSQLHttpClientWebsockets; // Change from TSQLHttpClient ---to---> TSQLHttpClientWebsockets;
     aPerson: TPerson;
     aID: integer;
+    newID:integer;
 begin
   aModel := DataModel;
   try
@@ -61,8 +62,10 @@ begin
       aPerson := TPerson.Create;
       try
         Randomize;
-        aPerson.Name := 'Name'+Int32ToUtf8(Random(10000));
-        aID := aClient.Add(aPerson,true);
+        newid:=Random(10000);
+        aPerson.IDValue:=newid;
+        aPerson.Name := 'Name'+Int32ToUtf8(newid);
+        aID := aClient.Add(aPerson,true,true);
 
       finally
         aPerson.Free;
@@ -74,7 +77,6 @@ begin
       finally
         aPerson.Free;
       end;
-
 
 
     finally
