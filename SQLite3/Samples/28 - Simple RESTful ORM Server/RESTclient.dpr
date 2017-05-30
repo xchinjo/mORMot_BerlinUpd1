@@ -7,18 +7,21 @@ program RESTclient;
 {$APPTYPE CONSOLE}
 
 uses
+
   {$I SynDprUses.inc}  // use FastMM4 on older Delphi, or set FPC threads
   SynCommons,          // framework core
   mORMot,              // RESTful server & ORM
   mORMotHttpClient,    // HTTP client to a mORMot RESTful server
-  RESTModel;           // data model unit, shared between server and client
+  RESTModel,           // data model unit, shared between server and client
 
+  sysutils,DateUtils;
 
 var aModel: TSQLModel;
     aClient: TSQLHttpClientWebsockets; // Change from TSQLHttpClient ---to---> TSQLHttpClientWebsockets;
     aPerson: TPerson;
     aID,i: integer;
-    newID:integer;
+    newID,m:integer;
+    stdate:TDateTime;
 begin
   aModel := DataModel;
   try
@@ -42,11 +45,12 @@ begin
 
       {**************** delte *****************}
       //aClient.Delete(TPerson,4);
+      stdate:=now;
 
 
 
       {**************** retrieve *****************}
-      for i := 1 to 1000 do
+      for i := 1 to 500000 do
         begin
 
             //aPerson.IDValue:=i;
@@ -55,7 +59,10 @@ begin
 
             if aClient.Retrieve(i,aPerson) then
             begin
-              Writeln('Retrive Person Name:'+aPerson.Name);
+             m := SecondsBetween(now(),stdate);
+
+
+              Writeln('Retrive Person Name:'+aPerson.Name+'  time : '+Format('%2.2d:%2.2d',[m div 60,m mod 60]));
               Writeln('update name to--> : abcsoft update ',i);
               aPerson.Name:='abcsoft  update '+Int32ToUtf8(i);
 
@@ -63,7 +70,11 @@ begin
             end else
             begin
                 {**************** add new *****************}
-                writeln('Add a new TPerson');
+                //m := MinutesBetween(now(),stdate);
+                m := SecondsBetween(now(),stdate);
+
+
+                writeln('Add a new TPerson'+Int32ToUtf8(newid)+'  time : '+Format('%2.2d:%2.2d',[m div 60,m mod 60]));
                 //aPerson := TPerson.Create;
                 try
                   Randomize;

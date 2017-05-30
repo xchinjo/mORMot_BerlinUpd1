@@ -35,7 +35,7 @@ var
   aModel: TSQLModel;
   //aProps: TSQLDBConnectionProperties;
   aProps : TSQLDBFireDACConnectionProperties;
-  FDPhysMySQLDriverLink:TFDPhysMySQLDriverLink;
+  //FDPhysMySQLDriverLink:TFDPhysMySQLDriverLink;
   FDPhysFBDriverLink: TFDPhysFBDriverLink;
 
   aRestServer: TSQLRestServerDB;

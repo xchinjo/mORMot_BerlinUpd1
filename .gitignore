@@ -42,7 +42,7 @@
 *.dcu
 *.lib
 *.a
-*.o
+#*.o
 *.ocx
 
 # FreePascal compiler
