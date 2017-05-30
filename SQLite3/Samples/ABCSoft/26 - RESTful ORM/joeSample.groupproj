@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{15EEBD5D-7041-4194-A9A6-18204DB06C2E}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="RESTserver.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="FishFactSyn\FishFactSyn.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="RESTserver">
+        <MSBuild Projects="RESTserver.dproj"/>
+    </Target>
+    <Target Name="RESTserver:Clean">
+        <MSBuild Projects="RESTserver.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="RESTserver:Make">
+        <MSBuild Projects="RESTserver.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="FishFactSyn">
+        <MSBuild Projects="FishFactSyn\FishFactSyn.dproj"/>
+    </Target>
+    <Target Name="FishFactSyn:Clean">
+        <MSBuild Projects="FishFactSyn\FishFactSyn.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="FishFactSyn:Make">
+        <MSBuild Projects="FishFactSyn\FishFactSyn.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="RESTserver;FishFactSyn"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="RESTserver:Clean;FishFactSyn:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="RESTserver:Make;FishFactSyn:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>
