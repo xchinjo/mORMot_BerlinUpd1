@@ -1,0 +1,31 @@
+object fmxClient: TfmxClient
+  Left = 0
+  Top = 0
+  Caption = 'Form1'
+  ClientHeight = 480
+  ClientWidth = 640
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  OnShow = FormShow
+  DesignerMasterStyle = 0
+  object Button1: TButton
+    Position.X = 32.000000000000000000
+    Position.Y = 56.000000000000000000
+    TabOrder = 0
+    Text = 'Open'
+    OnClick = Button1Click
+  end
+  object Memo1: TMemo
+    Touch.InteractiveGestures = [Pan, LongTap, DoubleTap]
+    DataDetectorTypes = []
+    Position.X = 56.000000000000000000
+    Position.Y = 120.000000000000000000
+    Size.Width = 537.000000000000000000
+    Size.Height = 321.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 1
+    Viewport.Width = 533.000000000000000000
+    Viewport.Height = 317.000000000000000000
+  end
+end
