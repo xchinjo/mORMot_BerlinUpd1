@@ -14,7 +14,9 @@ uses
   mORMotHttpClient,    // HTTP client to a mORMot RESTful server
   RESTModel,           // data model unit, shared between server and client
 
-  sysutils,DateUtils;
+  mORMotMidasVCL,
+
+  sysutils,DateUtils,Datasnap.DBClient;
 
 var aModel: TSQLModel;
     aClient: TSQLHttpClientWebsockets; // Change from TSQLHttpClient ---to---> TSQLHttpClientWebsockets;
@@ -22,6 +24,11 @@ var aModel: TSQLModel;
     aID,i: integer;
     newID,m:integer;
     stdate:TDateTime;
+   // cds:TClientDataSet;
+
+   job:TSynBackgroundThreadProcess;
+
+
 begin
   aModel := DataModel;
   try
@@ -35,7 +42,7 @@ begin
         exit;
       end;
 
-
+    //cds:=TClientDataSet.Create(nil);
     try
 
       //aClient.Delete()
@@ -43,10 +50,18 @@ begin
       //aClient.Retrieve()
       //aClient.Refresh()
 
+
       {**************** delte *****************}
       //aClient.Delete(TPerson,4);
       stdate:=now;
 
+{
+            JSONToClientDataSet(cds,aClient.RetrieveListJSON(TPerson,''));
+
+
+            if cds<>nil then
+            Writeln(' record count='+Int32ToUtf8(cds.RecordCount));
+ }
 
 
       {**************** retrieve *****************}
@@ -56,6 +71,9 @@ begin
             //aPerson.IDValue:=i;
            // aClient.Retrieve(i,aPerson,true);
             aPerson:=TPerson.Create;
+
+
+
 
             if aClient.Retrieve(i,aPerson) then
             begin
@@ -91,7 +109,10 @@ begin
 
 
 
+
         end;
+
+
 
       {
       aClient.Retrieve(7,aPerson,true);
@@ -119,6 +140,7 @@ begin
     write(#10'Press [Enter] to quit');
     readln;
   finally
+    //cds.Free;
     aModel.Free;
   end;
 end.
