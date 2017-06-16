@@ -3106,6 +3106,12 @@ function IdemPCharU(p, up: PUTF8Char): boolean;
 // - this version expects p^ to point to an Unicode char array
 function IdemPCharW(p: PWideChar; up: PUTF8Char): boolean;
 
+/// returns the index of a matching ending of p^ in upArray[]
+// - returns -1 if no item matched
+// - ignore case - upArray^ must be already Upper
+// - chars are compared as 7 bit Ansi only (no accentuated characters)
+function EndWithArray(const text: RawUTF8; const upArray: array of RawUTF8): integer;
+
 /// returns true if the file name extension contained in p^ is the same same as extup^
 // - ignore case - extup^ must be already Upper
 // - chars are compared as WinAnsi (codepage 1252), not as UTF-8
@@ -30472,6 +30478,19 @@ begin
   result := true;
 end;
 
+function EndWithArray(const text: RawUTF8; const upArray: array of RawUTF8): integer;
+var t,o: integer;
+begin
+  t := length(text);
+  if t>0 then
+    for result := 0 to high(upArray) do begin
+      o := t-length(UpArray[result]);
+      if (o>=0) and IdemPChar(PUTF8Char(pointer(text))+o,pointer(upArray[result])) then
+        exit;
+    end;
+  result := -1;
+end; 
+
 function UpperCopy255(dest: PAnsiChar; const source: RawUTF8): PAnsiChar;
 begin
   if source<>'' then
@@ -34820,7 +34839,7 @@ begin
     crcblock(@crc.b,@time.b);
     crcblock(@crc.b,@ExeVersion.Hash.b);
     if entropy<>nil then
-      for i := 0 to entropylen do
+      for i := 0 to entropylen-1 do
         crc.b[i and 15] := crc.b[i and 15] xor entropy^[i];
     rs1 := rs1 xor crc.c0;
     rs2 := rs2 xor crc.c1;
@@ -37991,7 +38010,7 @@ asm  // faster version of _CopyRecord{dest, source, typeInfo: Pointer} by AB
         mov     ecx, [ebx].TTypeInfo.recSize
         test    ebp, ebp
         jz      @fullcopy
-        push    ecx                        // sizeof(record) on stack
+        push    ecx                          // sizeof(record) on stack
         add     ebx, offset TTypeInfo.ManagedFields[0] // ebx = first TFieldInfo
 @next:  mov     ecx, [ebx].TFieldInfo.&Offset
         mov     edx, [ebx].TFieldInfo.TypeInfo
@@ -38014,13 +38033,13 @@ asm  // faster version of _CopyRecord{dest, source, typeInfo: Pointer} by AB
         cmp     ecx, tkUString
         je      @UString
 {$else} cmp     ecx, tkDynArray
-        je      @DynArray
+        je      @dynaray
 {$endif}        ja      @err
         jmp     dword ptr[ecx * 4 + @tab - tkWString * 4]
 
-@Tab:   dd      @WString, @Variant, @ARRAY, @RECORD, @INTERFACE, @err
+@Tab:   dd      @WString, @variant, @array, @record, @interface, @err
 {$ifdef UNICODE}
-        dd      @DynArray
+        dd      @dynaray
 {$endif}
 @errv:  mov     al, reVarInvalidOp
         jmp     @err2
@@ -38031,7 +38050,7 @@ asm  // faster version of _CopyRecord{dest, source, typeInfo: Pointer} by AB
         pop     ebp
         jmp     System.Error
         nop // all functions below have esi=source edi=dest
-@Array: movzx   ecx, byte ptr[edx].TTypeInfo.NameLen
+@array: movzx   ecx, byte ptr[edx].TTypeInfo.NameLen
         push    dword ptr[edx + ecx].TTypeInfo.recSize
         push    dword ptr[edx + ecx].TTypeInfo.ManagedCount
         mov     ecx, dword ptr[edx + ecx].TTypeInfo.ManagedFields[0] // Fields[0].TypeInfo^
@@ -38040,7 +38059,7 @@ asm  // faster version of _CopyRecord{dest, source, typeInfo: Pointer} by AB
         call    System.@CopyArray
         pop     eax // restore sizeof(Array)
         jmp     @finish
-@Record:movzx   ecx, byte ptr[edx].TTypeInfo.NameLen
+@record:movzx   ecx, byte ptr[edx].TTypeInfo.NameLen
         mov     ecx, [edx + ecx].TTypeInfo.recSize
         push    ecx
         mov     ecx, edx
@@ -38051,7 +38070,7 @@ asm  // faster version of _CopyRecord{dest, source, typeInfo: Pointer} by AB
         nop
         nop
         nop
-@Variant:
+@variant:
 {$ifdef NOVARCOPYPROC}
         mov     edx, esi
         call    System.@VarCopy
@@ -38066,14 +38085,14 @@ asm  // faster version of _CopyRecord{dest, source, typeInfo: Pointer} by AB
         nop
         nop
 {$endif}
-@Interface:
+@interface:
         mov     edx, [esi]
         call    System.@IntfCopy
         jmp     @fin4
         nop
         nop
         nop
-@DynArray:
+@dynaray:
         mov     ecx, edx // ecx=TypeInfo
         mov     edx, [esi]
         call    System.@DynArrayAsg
@@ -40545,7 +40564,8 @@ begin
             ArrayTyp := TJSONCustomParserRTTI.TypeNameToSimpleRTTIType(
               @PByteArray(TypIdent)[1],len-9,ArrayTypIdent);
             if ArrayTyp=ptCustom then
-              raise ESynException.CreatEUTF8('%.Parse: unknown %',[self,TypIdent]);
+              raise ESynException.CreateUTF8('%.Parse: % is not a T*DynArray of a simple type',
+                [self,TypIdent]);
             Typ := ptArray;
           end;
           ExpectedEnd := eeNothing;
@@ -40612,7 +40632,7 @@ begin
           [self,fRoot.CustomTypeName]);
     {$else}
     raise ESynException.CreateUTF8('%.Create with no enhanced RTTI for %',
-      [self,TypeInfoToName(aRecordTypeInfo)]);
+      [self,PShortString(@PTypeInfo(aRecordTypeInfo).NameLen)^]);
     {$endif}
   end;
   fItems.Add(fRoot);
@@ -44873,7 +44893,7 @@ begin
 end;
 
 procedure TDynArray.Reverse;
-var i, siz, n, tmp: integer;
+var siz, n, tmp: integer;
     P1, P2: PAnsiChar;
     c: AnsiChar;
     i64: Int64;
@@ -44886,7 +44906,7 @@ begin
     1: begin
       // optimized version for TByteDynArray and such
       P2 := P1+n;
-      for i := 1 to n shr 1 do begin
+      while P1<P2 do begin
         c := P1^;
         P1^ := P2^;
         P2^ := c;
@@ -44897,7 +44917,7 @@ begin
     4: begin
       // optimized version for TIntegerDynArray + TRawUTF8DynArray and such
       P2 := P1+n*sizeof(Integer);
-      for i := 1 to n shr 1 do begin
+      while P1<P2 do begin
         tmp := PInteger(P1)^;
         PInteger(P1)^ := PInteger(P2)^;
         PInteger(P2)^ := tmp;
@@ -44908,7 +44928,7 @@ begin
     8: begin
       // optimized version for TInt64DynArray + TDoubleDynArray and such
       P2 := P1+n*sizeof(Int64);
-      for i := 1 to n shr 1 do begin
+      while P1<P2 do begin
         i64 := PInt64(P1)^;
         PInt64(P1)^ := PInt64(P2)^;
         PInt64(P2)^ := i64;
@@ -44919,7 +44939,7 @@ begin
     16: begin
       // optimized version for TVariantDynArray and such
       P2 := P1+n*16;
-      for i := 1 to n shr 1 do begin
+      while P1<P2 do begin
         Exchg16(Pointer(P1),Pointer(P2));
         inc(P1,16);
         dec(P2,16);
@@ -44928,7 +44948,7 @@ begin
     else begin
       // generic version
       P2 := P1+n*siz;
-      for i := 1 to n shr 1 do begin
+      while P1<P2 do begin
         Exchg(P1,P2,siz);
         inc(P1,siz);
         dec(P2,siz);
@@ -61970,7 +61990,8 @@ begin
     intvalues := DocVariantType.InternValues else
     intvalues := nil;
   result := 0; // returns number of changed values
-  for i := 0 to Count-1 do begin
+  for i := 0 to Count-1 do
+  if List[i].Name<>'' then begin
     VarClear(v);
     if ValueAsString or not GetNumericVariantFromJSON(pointer(List[i].Value),
         TVarData(v),AllowVarDouble) then
@@ -63997,4 +64018,3 @@ finalization
   DeleteCriticalSection(GlobalCriticalSection);
   //writeln('TDynArrayHashedCollisionCount=',TDynArrayHashedCollisionCount); readln;
 end.
-
