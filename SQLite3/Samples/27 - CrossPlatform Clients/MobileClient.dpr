@@ -4,7 +4,8 @@ uses
   System.StartUpCopy,
   FMX.MobilePreview,
   FMX.Forms,
-  MobileMain in 'MobileMain.pas' {Form1};
+  MobileMain in 'MobileMain.pas' {Form1},
+  mORMotClient in 'mORMotClient.pas';
 
 {$R *.res}
 

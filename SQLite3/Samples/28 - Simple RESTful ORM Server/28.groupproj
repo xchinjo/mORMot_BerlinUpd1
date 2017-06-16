@@ -12,6 +12,9 @@
         <Projects Include="fmxClient\fmxClient.dproj">
             <Dependencies/>
         </Projects>
+        <Projects Include="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj">
+            <Dependencies/>
+        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -47,14 +50,23 @@
     <Target Name="fmxClient:Make">
         <MSBuild Projects="fmxClient\fmxClient.dproj" Targets="Make"/>
     </Target>
+    <Target Name="SimpleRestRequestSample">
+        <MSBuild Projects="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj"/>
+    </Target>
+    <Target Name="SimpleRestRequestSample:Clean">
+        <MSBuild Projects="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="SimpleRestRequestSample:Make">
+        <MSBuild Projects="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="RESTclient;RESTserver;fmxClient"/>
+        <CallTarget Targets="RESTclient;RESTserver;fmxClient;SimpleRestRequestSample"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="RESTclient:Clean;RESTserver:Clean;fmxClient:Clean"/>
+        <CallTarget Targets="RESTclient:Clean;RESTserver:Clean;fmxClient:Clean;SimpleRestRequestSample:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="RESTclient:Make;RESTserver:Make;fmxClient:Make"/>
+        <CallTarget Targets="RESTclient:Make;RESTserver:Make;fmxClient:Make;SimpleRestRequestSample:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

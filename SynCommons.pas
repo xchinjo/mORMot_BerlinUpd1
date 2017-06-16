@@ -6964,7 +6964,7 @@ const
   {$ifdef MAX_SQLFIELDS_256}
   MAX_SQLFIELDS = 256;
   {$else}
-  MAX_SQLFIELDS = 64;
+  MAX_SQLFIELDS = 128;
   {$endif}
   {$endif}
   {$endif}
@@ -63997,3 +63997,4 @@ finalization
   DeleteCriticalSection(GlobalCriticalSection);
   //writeln('TDynArrayHashedCollisionCount=',TDynArrayHashedCollisionCount); readln;
 end.
+
