@@ -6364,6 +6364,14 @@ function GetEnumName(aTypeInfo: pointer; aIndex: integer): PShortString;
 // - may be used as cache for overloaded ToText() content
 procedure GetEnumNames(aTypeInfo: pointer; aDest: PPShortString);
 
+/// helper to retrieve all trimmed texts of an enumerate
+// - may be used as cache to retrieve UTF-8 text without lowercase 'a'..'z' chars
+procedure GetEnumTrimmedNames(aTypeInfo: pointer; aDest: PRawUTF8);
+
+/// helper to retrieve all (translated) caption texts of an enumerate
+// - may be used as cache for overloaded ToCaption() content
+procedure GetEnumCaptions(aTypeInfo: pointer; aDest: PString);
+
 /// helper to retrieve the index of an enumerate item from its text
 // - returns -1 if aValue was not found
 // - will search for the exact text and also trim the lowercase 'a'..'z' chars on
@@ -6980,7 +6988,7 @@ const
   {$ifdef MAX_SQLFIELDS_256}
   MAX_SQLFIELDS = 256;
   {$else}
-  MAX_SQLFIELDS = 128;
+  MAX_SQLFIELDS = 64;
   {$endif}
   {$endif}
   {$endif}
@@ -22463,6 +22471,42 @@ begin
     end;
 end;
 
+procedure GetEnumTrimmedNames(aTypeInfo: pointer; aDest: PRawUTF8);
+var MaxValue, i: integer;
+    res: PShortString;
+begin
+  if GetEnumInfo(aTypeInfo,MaxValue,res) then
+    for i := 0 to MaxValue do begin
+      aDest^ := TrimLeftLowerCaseShort(res);
+      inc(PByte(res),ord(res^[0])+1); // next short string
+      inc(aDest);
+    end;
+end;
+
+procedure GetCaptionFromTrimmed(PS: PAnsiChar; var result: string);
+var tmp: array[byte] of AnsiChar;
+    L: integer;
+begin
+  L := ord(PS^);
+  inc(PS);
+  while (L>0) and (PS^ in ['a'..'z']) do begin inc(PS); dec(L); end;
+  tmp[L] := #0; // as expected by GetCaptionFromPCharLen/UnCamelCase
+  MoveFast(PS^,tmp,L);
+  GetCaptionFromPCharLen(tmp,result);
+end;
+
+procedure GetEnumCaptions(aTypeInfo: pointer; aDest: PString);
+var MaxValue, i: integer;
+    res: PShortString;
+begin
+  if GetEnumInfo(aTypeInfo,MaxValue,res) then
+    for i := 0 to MaxValue do begin
+      GetCaptionFromTrimmed(pointer(res),aDest^);
+      inc(PByte(res),ord(res^[0])+1); // next short string
+      inc(aDest);
+    end;
+end;
+
 function GetEnumName(aTypeInfo: pointer; aIndex: integer): PShortString;
 {$ifdef HASINLINENOTX86}
 var MaxValue: integer;
@@ -28716,16 +28760,14 @@ var
   TemporaryFileNameRandom: integer;
 
 function TemporaryFileName: TFileName;
-var random: string[8];
-    rnd: cardinal;
+var folder: TFileName;
 begin // fast cross-platform implementation
+  folder := GetSystemPath(spTempFolder);
   if TemporaryFileNameRandom=0 then
     TemporaryFileNameRandom := Random32;
-  random[0] := #8;
-  repeat
-    rnd := InterlockedIncrement(TemporaryFileNameRandom); // thread-safe :)
-    SynCommons.BinToHex(@rnd,@random[1],sizeof(rnd));
-    result := format('%s%s_%s.tmp',[GetSystemPath(spTempFolder),ExeVersion.ProgramName,random]);
+  repeat // thread-safe unique file name generation 
+    result := format('%s%s_%s.tmp',[folder,ExeVersion.ProgramName,
+      CardinalToHexShort(InterlockedIncrement(TemporaryFileNameRandom))]);
   until not FileExists(result);
 end;
 
@@ -35421,17 +35463,8 @@ begin
 end;
 
 function GetCaptionFromEnum(aTypeInfo: pointer; aIndex: integer): string;
-var PS: PUTF8Char;
-    tmp: array[byte] of AnsiChar;
-    L: integer;
 begin
-  PS := pointer(GetEnumName(aTypeInfo,aIndex));
-  L := ord(PS^);
-  inc(PS);
-  while (L>0) and (PS^ in ['a'..'z']) do begin inc(PS); dec(L); end;
-  tmp[L] := #0; // as expected by GetCaptionFromPCharLen/UnCamelCase
-  MoveFast(PS^,tmp,L);
-  GetCaptionFromPCharLen(tmp,result);
+  GetCaptionFromTrimmed(pointer(GetEnumName(aTypeInfo,aIndex)),result);
 end;
 
 function CharSetToCodePage(CharSet: integer): cardinal;
@@ -51470,7 +51503,6 @@ begin
 end;
 
 function GotoEndJSONItem(P: PUTF8Char): PUTF8Char;
-label next;
 begin
   result := nil; // to notify unexpected end
   if P=nil then
@@ -51489,14 +51521,15 @@ begin
     if P=nil then
       exit;
     if P^ in [#1..' '] then repeat inc(P) until not(P^ in [#1..' ']);
-    goto next;
+    if P^<>#0 then
+      result := P;
+    exit;
   end;
   end;
   repeat // numeric or true/false/null or MongoDB extended {age:{$gt:18}}
     inc(P);
     if P^=#0 then exit; // unexpected end
   until P^ in [':',',',']','}'];
-next:
   if P^=#0 then
     exit;
   result := P;
@@ -64059,6 +64092,11 @@ initialization
   Assert(sizeof(THash128Rec)=sizeof(THash128));
   Assert(sizeof(THash256Rec)=sizeof(THash256));
   Assert(sizeof(TBlock128)=sizeof(THash128));
+  {$ifdef MSWINDOWS}
+  {$ifndef CPU64}
+  Assert(sizeof(TFileTime)=sizeof(Int64)); // see e.g. FileTimeToInt64
+  {$endif}
+  {$endif}
 {  TypeInfoSaveRegisterKnown([
     TypeInfo(boolean),TypeInfo(byte),TypeInfo(word),TypeInfo(cardinal),TypeInfo(Int64),
     TypeInfo(single),TypeInfo(double),TypeInfo(currency),TypeInfo(extended),TypeInfo(TDateTime),
