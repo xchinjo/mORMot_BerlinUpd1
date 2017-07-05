@@ -3764,7 +3764,7 @@ const LOGCOLORS: array[TSynLogInfo] of TConsoleColor = (
 //    sllServiceCall, sllServiceReturn, sllUserAuth,
   ccLightMagenta, ccLightMagenta, ccMagenta,
 //    sllCustom1, sllCustom2, sllCustom3, sllCustom4,
-  ccLightGray, ccLightGray,ccLightGray,ccLightGray,
+  ccLightGray, ccYellow,ccLightMagenta,ccLightGreen,
 //    sllNewRun, sllDDDError, sllDDDInfo, sllMonitoring
   ccLightMagenta, ccLightRed, ccWhite, ccLightBlue);
 begin
