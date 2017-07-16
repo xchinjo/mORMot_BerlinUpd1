@@ -40,6 +40,7 @@ unit SynPdf;
    Florian Grummel
    Harald Simon
    Josh Kelley (joshkel)
+   Karel (vandrovnik)
    LoukaO  
    Marsh
    MChaos
@@ -1337,11 +1338,6 @@ type
   TPdfPage = class;
   TPdfPageClass = class of TPdfPage;
 
-  /// array used to store a TPdfImage hash
-  // - uses 4 crc32c hash codes, created with 4 diverse seeds, in order to avoid
-  // false positives
-  TPdfImageHash = array[0..3] of cardinal;
-
   /// potential font styles
   TPdfFontStyle = (pfsBold, pfsItalic, pfsUnderline, pfsStrikeOut);
   /// set of font styles
@@ -1521,7 +1517,7 @@ type
     // - returns '' if this image is not already there
     // - uses 4 hash codes, created with 4 diverse seeds, in order to avoid
     // false positives
-    function GetXObjectImageName(const Hash: TPdfImageHash; Width, Height: Integer): PDFString;
+    function GetXObjectImageName(const Hash: THash128Rec; Width, Height: Integer): PDFString;
     {$endif USE_BITMAP}
     /// wrapper to create an annotation
     // - the annotation is set to a specified position of the current page
@@ -2742,7 +2738,7 @@ type
   private
     fPixelHeight: Integer;
     fPixelWidth: Integer;
-    fHash: TPdfImageHash;
+    fHash: THash128Rec;
   public
     /// create the image from a supplied VCL TGraphic instance
     // - handle TBitmap and SynGdiPlus picture types, i.e. TJpegImage
@@ -5897,7 +5893,7 @@ begin
 end;
 
 {$ifdef USE_BITMAP}
-function TPdfDocument.GetXObjectImageName(const Hash: TPdfImageHash;
+function TPdfDocument.GetXObjectImageName(const Hash: THash128Rec;
   Width, Height: Integer): PDFString;
 var Obj: TPdfXObject;
     Img: TPdfImage absolute Obj;
@@ -5909,8 +5905,7 @@ begin
       Obj := TPdfXObject(FXRef.GetObject(Obj.FObjectNumber));
     if (Obj<>nil) and Obj.InheritsFrom(TPdfImage) and
        (Img.PixelWidth=Width) and (Img.PixelHeight=Height) and
-       not IsZero(@Img.fHash,sizeof(Hash)) and
-       CompareMem(@Img.fHash,@Hash,SizeOf(Hash)) and
+       not IsZero(Img.fHash.b) and IsEqual(Img.fHash.b,Hash.b) and
        (Obj.Attributes<>nil) then begin
       result := TPdfName(Obj.Attributes.ValueByName('Name')).Value;
       if result<>'' then
@@ -6567,16 +6562,17 @@ end;
 function TPdfDocument.CreateOrGetImage(B: TBitmap; DrawAt: PPdfBox; ClipRc: PPdfBox): PDFString;
 var J: TJpegImage;
     Img: TPdfImage;
-    Hash: TPdfImageHash;
+    Hash: THash128Rec;
     y,w,h,row: integer;
     nPals: cardinal;
     Pals: array of TPaletteEntry;
 const PERROW: array[TPixelFormat] of byte = (0,1,4,8,15,16,24,32,0);
   procedure DoHash(bits: pointer; size: Integer);
-  var i: integer;
   begin
-    for i := 0 to high(Hash) do
-      Hash[i] := crc32c(Hash[i],bits,size);
+    Hash.c0 := crc32c(Hash.c0,bits,size);
+    Hash.c1 := crc32c(Hash.c1,bits,size);
+    Hash.c2 := Hash.c2+Hash.c0; // naive, but sufficient, cascading
+    Hash.c3 := Hash.c3+Hash.c1;
   end;
 begin
   result := '';
@@ -6590,10 +6586,10 @@ begin
       B.PixelFormat := pf24bit;
       row := 24;
     end;
-    Hash[0] := 0;
-    Hash[1] := 2972236863;
-    Hash[2] := 1598500460;
-    Hash[3] := 767514222;
+    Hash.c0 := 0;
+    Hash.c1 := 1400305337; // 3 prime numbers
+    Hash.c2 := 2468776129;
+    Hash.c3 := 3121238909;
     if B.Palette<>0 then begin
       nPals := 0;
       if (GetObject(B.Palette,sizeof(nPals),@nPals)<>0) and (nPals>0) then begin
@@ -9237,9 +9233,9 @@ type
   end;
 
 const
-  STOCKBRUSHCOLOR: array[WHITE_BRUSH..BLACK_BRUSH] of cardinal = (
+  STOCKBRUSHCOLOR: array[WHITE_BRUSH..BLACK_BRUSH] of integer = (
     clWhite, $AAAAAA, $808080, $666666, clBlack);
-  STOCKPENCOLOR: array[WHITE_PEN..BLACK_PEN] of cardinal = (
+  STOCKPENCOLOR: array[WHITE_PEN..BLACK_PEN] of integer = (
     clWhite, clBlack);
 
 function CenterPoint(const Rect: TRect): TPoint; {$ifdef HASINLINE}inline;{$endif}
@@ -10145,10 +10141,20 @@ begin
           brush.null := false;
         end;
         NULL_PEN: begin
+          if fInLined and ((pen.style<>PS_NULL) or not pen.null) then begin
+            fInLined := False;
+            if not pen.null then
+              Canvas.Stroke;
+          end;
           pen.style := PS_NULL;
           pen.null := true;
         end;
         WHITE_PEN, BLACK_PEN: begin
+          if fInLined and ((pen.color<>STOCKPENCOLOR[iObject]) or not pen.null) then begin
+            fInLined := False;
+            if not pen.null then
+              Canvas.Stroke;
+          end;
           pen.color := STOCKPENCOLOR[iObject];
           pen.null := false;
         end;

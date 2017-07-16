@@ -1178,6 +1178,9 @@ type
   TInt64Array = array[0..MaxInt div SizeOf(Int64)-1] of Int64;
   PInt64Array = ^TInt64Array;
 
+  TQWordArray = array[0..MaxInt div SizeOf(QWord)-1] of QWord;
+  PQWordArray = ^TQWordArray;
+
   TSmallIntArray = array[0..MaxInt div SizeOf(SmallInt)-1] of SmallInt;
   PSmallIntArray = ^TSmallIntArray;
 
@@ -3106,6 +3109,13 @@ function IdemPCharU(p, up: PUTF8Char): boolean;
 // - ignore case - up^ must be already Upper
 // - this version expects p^ to point to an Unicode char array
 function IdemPCharW(p: PWideChar; up: PUTF8Char): boolean;
+
+/// check matching ending of p^ in upText
+// - returns true if the item matched
+// - ignore case - upText^ must be already Upper
+// - chars are compared as 7 bit Ansi only (no accentuated characters)
+function EndWith(const text, upText: RawUTF8): boolean;
+  {$ifdef HASINLINE}inline;{$endif}
 
 /// returns the index of a matching ending of p^ in upArray[]
 // - returns -1 if no item matched
@@ -11443,6 +11453,13 @@ type
   THash256 = array[0..31] of byte;
   /// pointer to a 256-bit hash value
   PHash256 = ^THash256;
+  /// store a 512-bit hash value
+  // - e.g. a SHA-512 digest, a TECCSignature result, or array[0..15] of cardinal
+  // - consumes 64 bytes of memory
+  THash512 = array[0..63] of byte;
+  /// pointer to a 512-bit hash value
+  PHash512 = ^THash512;
+
   /// store a 128-bit buffer
   // - e.g. an AES block
   // - consumes 16 bytes of memory
@@ -11469,7 +11486,7 @@ type
   3: (c: TBlock128);
   4: (b: THash128);
   end;
-  /// pointer to an array of two 64-bit hash values
+  /// pointer to 128-bit hash map variable record
   PHash128Rec = ^THash128Rec;
 
   /// map an infinite array of 256-bit hash values
@@ -11491,8 +11508,31 @@ type
   3: (c0,c1: TBlock128);
   4: (b: THash256);
   end;
-  /// pointer to an array of two 128-bit hash values
+  /// pointer to 256-bit hash map variable record
   PHash256Rec = ^THash256Rec;
+
+  /// map an infinite array of 512-bit hash values
+  // - each item consumes 64 bytes of memory
+  THash512Array = array[0..(maxInt div sizeof(THash512))-1] of THash512;
+  /// pointer to an infinite array of 512-bit hash values
+  PHash512Array = ^THash512Array;
+  /// store several 512-bit hash values
+  // - e.g. SHA-512 digests, or array[0..15] of cardinal
+  // - consumes 64 bytes of memory per item
+  THash512DynArray = array of THash512;
+  /// map a 512-bit hash as an array of lower bit size values
+  // - consumes 32 bytes of memory
+  THash512Rec = packed record
+  case integer of
+  0: (Lo,Hi: THash256);
+  1: (h0,h1,h2,h3: THash128);
+  2: (d0,d1,d2,d3,d4,d5,d6,d7: Int64);
+  3: (i0,i1,i2,i3,i4,i5,i6,i7,i8,i9,i10,i11,i12,i13,i14,i15: integer);
+  4: (c0,c1,c2,c3: TBlock128);
+  5: (b: THash512);
+  end;
+  /// pointer to 512-bit hash map variable record
+  PHash512Rec = ^THash512Rec;
 
 /// compute a 128-bit checksum on the supplied buffer, cascading two crc32c
 // - will use SSE 4.2 hardware accelerated instruction, if available
@@ -11528,7 +11568,7 @@ function IsZero(const dig: THash128): boolean; overload;
 
 /// returns TRUE if all 16 bytes of both 128-bit buffers do match
 // - e.g. a MD5 digest, or an AES block
-// - this function is not sensitive to any timing attack, so is designed 
+// - this function is not sensitive to any timing attack, so is designed
 // for cryptographic purpose
 function IsEqual(const A,B: THash128): boolean; overload;
   {$ifdef HASINLINE}inline;{$endif}
@@ -11551,7 +11591,7 @@ function IsZero(const dig: THash256): boolean; overload;
 
 /// returns TRUE if all 32 bytes of both 256-bit buffers do match
 // - e.g. a SHA-256 digest, or a TECCSignature result
-// - this function is not sensitive to any timing attack, so is designed 
+// - this function is not sensitive to any timing attack, so is designed
 // for cryptographic purpose
 function IsEqual(const A,B: THash256): boolean; overload;
   {$ifdef HASINLINE}inline;{$endif}
@@ -11560,6 +11600,29 @@ function IsEqual(const A,B: THash256): boolean; overload;
 // - may be used to cleanup stack-allocated content
 // ! ... finally FillZero(digest); end;
 procedure FillZero(out dig: THash256); overload;
+
+/// returns TRUE if all 64 bytes of this 512-bit buffer equal zero
+// - e.g. a SHA-512 digest
+function IsZero(const dig: THash512): boolean; overload;
+  {$ifdef HASINLINE}inline;{$endif}
+
+/// returns TRUE if all 64 bytes of both 512-bit buffers do match
+// - e.g. two SHA-512 digests
+// - this function is not sensitive to any timing attack, so is designed
+// for cryptographic purpose
+function IsEqual(const A,B: THash512): boolean; overload;
+  {$ifdef HASINLINE}inline;{$endif}
+
+/// fill all 64 bytes of this 512-bit buffer with zero
+// - may be used to cleanup stack-allocated content
+// ! ... finally FillZero(digest); end;
+procedure FillZero(out dig: THash512); overload;
+
+/// compute a 512-bit checksum on the supplied buffer using crc32c
+// - will use SSE 4.2 hardware accelerated instruction, if available
+// - will combine two crc32c() calls into a single THash512 result
+// - by design, such combined hashes cannot be cascaded
+procedure crc512c(buf: PAnsiChar; len: cardinal; out crc: THash512);
 
 /// fill all bytes of this memory buffer with zeros, i.e. 'toto' -> #0#0#0#0
 // - will write the memory buffer directly, so if this string instance is shared
@@ -16359,7 +16422,7 @@ type
     procedure ComputeTime;
     /// stop the timer, returning the time elapsed as text with time resolution
     // (us,ms,s)
-    // - is just a wrapper around ComputeTime + GetTime
+    // - is just a wrapper around ComputeTime + Time
     function Stop: RawUTF8;
     /// stop the timer, ready to continue its time measurement via Resume
     procedure Pause;
@@ -23717,7 +23780,7 @@ var len, lenSub: PtrInt;
     p, pSub, pStart, pStop: PUTF8Char;
 label Loop0, Loop4, TestT, Test0, Test1, Test2, Test3, Test4,
       AfterTestT, AfterTest0, Ret, Exit;
-begin;
+begin
   pSub := pointer(SubStr);
   p := pointer(S);
   if (p=nil) or (pSub=nil) or (Offset<1) then begin
@@ -24945,8 +25008,7 @@ var i, tmpN, L, A, P, len: PtrInt;
     inlin: set of 0..255;
     F,FDeb: PUTF8Char;
     wasString: Boolean;
-const QUOTECHAR: array[boolean] of AnsiChar = ('''','"');
-      NOTTOQUOTE: array[boolean] of set of 0..31 = (
+const NOTTOQUOTE: array[boolean] of set of 0..31 = (
         [vtBoolean,vtInteger,vtInt64,vtCurrency,vtExtended],
         [vtBoolean,vtInteger,vtInt64,vtCurrency,vtExtended,vtVariant]);
 label Txt;
@@ -30483,31 +30545,35 @@ function IdemPChar(p: PUTF8Char; up: PAnsiChar): boolean;
 // eax=p edx=up
 asm
         test    eax, eax
-        jz      @e // P=nil -> false
+        jz      @e            // P=nil -> false
         test    edx, edx
         push    ebx
-        jz      @t // up=nil -> true
-        mov     ecx, [edx] // cl=up^[0]
-        test    cl, cl
-        movzx   ebx, byte ptr[eax] // bl=p^[0]
-        jz      @t
-        cmp     cl, byte ptr[ebx + NormToUpperAnsi7] // bl=NormToUpperAnsi7[p^[0]]
-        jnz     @f // quick return in case of first invalid char
-        lea     eax, [eax + 1]
-        lea     edx, [edx + 1]
-        shr     ecx, 8 // cl=up^[1], ch=up^[2]
-@1:     mov     bl, [eax] // bl=p^[0]
-        test    cl, cl
-        jz      @t // up^[0]=#0 -> OK
-        cmp     cl, byte ptr[ebx + NormToUpperAnsi7] // bl=NormToUpperAnsi7[p^[0]]
-        mov     bl, [eax + 1] // bl=p^[1]
-        lea     eax, [eax + 2]
-        lea     edx, [edx + 2]
+        jz      @t            // up=nil -> true
+        mov     ecx, [edx]    // optimized for DWORD aligned read
+        xor     ebx, ebx
+@1:     test    cl, cl
+        mov     bl, [eax]
+        jz      @t            // up^[0]=#0 -> OK
+        cmp     cl, byte ptr[ebx + NormToUpperAnsi7] // NormToUpperAnsi7[p^[0]]
+        mov     bl, [eax + 1]
         jne     @f
         test    ch, ch
-        jz      @t // up^[1]=#0 -> OK
-        cmp     ch, byte ptr[ebx + NormToUpperAnsi7] // bl=NormToUpperAnsi7[p^[1]]
-        mov     ecx, [edx] // cl=up^[0] ch=up^[1]
+        jz      @t            // up^[1]=#0 -> OK
+        cmp     ch, byte ptr[ebx + NormToUpperAnsi7] // NormToUpperAnsi7[p^[1]]
+        jne     @f
+        shr     ecx, 16       // cl=up^[2] ch=up^[3]
+        mov     bl, [eax + 2]
+        test    cl, cl
+        jz      @t            // up^[2]=#0 -> OK
+        cmp     cl, byte ptr[ebx + NormToUpperAnsi7] // NormToUpperAnsi7[p^[2]]
+        mov     bl, [eax + 3]
+        jne     @f
+        test    ch, ch
+        lea     eax, [eax + 4]
+        lea     edx, [edx + 4]
+        jz      @t            // up^[3]=#0 -> OK
+        cmp     ch, byte ptr[ebx + NormToUpperAnsi7] // NormToUpperAnsi7[p^[3]]
+        mov     ecx, [edx]    // next DWORD from up^
         je      @1
 @f:     pop     ebx // NormToUpperAnsi7[p^]<>up^ -> FALSE
 @e:     xor     eax, eax
@@ -30542,6 +30608,13 @@ begin
   result := true;
 end;
 
+function EndWith(const text, upText: RawUTF8): boolean;
+var o: integer;
+begin
+  o := length(text)-length(upText);
+  result := (o>=0) and IdemPChar(PUTF8Char(pointer(text))+o,pointer(upText));
+end;
+
 function EndWithArray(const text: RawUTF8; const upArray: array of RawUTF8): integer;
 var t,o: integer;
 begin
@@ -30553,7 +30626,7 @@ begin
         exit;
     end;
   result := -1;
-end; 
+end;
 
 function UpperCopy255(dest: PAnsiChar; const source: RawUTF8): PAnsiChar;
 begin
@@ -32316,9 +32389,9 @@ begin
 end;
 {$else}
 asm
-  bt [eax],edx // use very fast i386 bit statement
-  sbb eax,eax
-  and eax,1
+        bt      [eax], edx // use very fast i386 bit statement
+        sbb     eax, eax
+        and     eax, 1
 end;
 {$endif}
 
@@ -33414,6 +33487,67 @@ begin
   PInt64Array(@dig)^[1] := 0;
   PInt64Array(@dig)^[2] := 0;
   PInt64Array(@dig)^[3] := 0;
+end;
+
+function IsZero(const dig: THash512): boolean;
+var a: TPtrIntArray absolute dig;
+begin
+  result := (a[0]=0) and (a[1]=0) and (a[2]=0) and (a[3]=0) and
+            (a[4]=0) and (a[5]=0) and (a[6]=0) and (a[7]=0)
+     {$ifndef CPU64} and (a[8]=0) and (a[9]=0)
+                     and (a[10]=0) and (a[11]=0)
+                     and (a[12]=0) and (a[13]=0)
+                     and (a[14]=0) and (a[15]=0){$endif};
+end;
+
+function IsEqual(const A,B: THash512): boolean;
+var a_: TPtrIntArray absolute A;
+    b_: TPtrIntArray absolute B;
+begin // uses anti-forensic time constant "xor/or" pattern
+  result := ((a_[0] xor b_[0]) or (a_[1] xor b_[1]) or
+             (a_[2] xor b_[2]) or (a_[3] xor b_[3]) or
+             (a_[4] xor b_[4]) or (a_[5] xor b_[5]) or
+             (a_[6] xor b_[6]) or (a_[7] xor b_[7])
+    {$ifndef CPU64} or (a_[8] xor b_[8]) or (a_[5] xor b_[5])
+                    or (a_[10] xor b_[10]) or (a_[11] xor b_[11])
+                    or (a_[12] xor b_[12]) or (a_[13] xor b_[13])
+                    or (a_[14] xor b_[14]) or (a_[15] xor b_[15]) {$endif})=0;
+end;
+
+procedure FillZero(out dig: THash512);
+begin
+  PInt64Array(@dig)^[0] := 0;
+  PInt64Array(@dig)^[1] := 0;
+  PInt64Array(@dig)^[2] := 0;
+  PInt64Array(@dig)^[3] := 0;
+  PInt64Array(@dig)^[4] := 0;
+  PInt64Array(@dig)^[5] := 0;
+  PInt64Array(@dig)^[6] := 0;
+  PInt64Array(@dig)^[7] := 0;
+end;
+
+procedure crc512c(buf: PAnsiChar; len: cardinal; out crc: THash512);
+var h: THash512Rec absolute crc;
+    h1,h2: cardinal;
+begin // see https://goo.gl/Pls5wi
+  h1 := crc32c(0,buf,len);
+  h2 := crc32c(h1,buf,len);
+  h.i0 := h1; inc(h1,h2);
+  h.i1 := h1; inc(h1,h2);
+  h.i2 := h1; inc(h1,h2);
+  h.i3 := h1; inc(h1,h2);
+  h.i4 := h1; inc(h1,h2);
+  h.i5 := h1; inc(h1,h2);
+  h.i6 := h1; inc(h1,h2);
+  h.i7 := h1; inc(h1,h2);
+  h.i8 := h1; inc(h1,h2);
+  h.i9 := h1; inc(h1,h2);
+  h.i10 := h1; inc(h1,h2);
+  h.i11 := h1; inc(h1,h2);
+  h.i12 := h1; inc(h1,h2);
+  h.i13 := h1; inc(h1,h2);
+  h.i14 := h1; inc(h1,h2);
+  h.i15 := h1;
 end;
 
 procedure FillZero(var secret: RawByteString); overload;
@@ -35418,7 +35552,7 @@ function ClassNameShort(C: TClass): PShortString;
 // new TObject.ClassName is UnicodeString (since Delphi 2009) -> inline code
 // with vmtClassName = UTF-8 encoded text stored in a shortstring = -44
 begin
-  result := PPointer(PtrInt(C)+vmtClassName)^;
+  result := PPointer(PtrInt(PtrUInt(C))+vmtClassName)^;
 end;
 
 function ClassNameShort(Instance: TObject): PShortString;
@@ -35431,7 +35565,7 @@ var P: PShortString;
 begin
   if C=nil then
     result := '' else begin
-    P := PPointer(PtrInt(C)+vmtClassName)^;
+    P := PPointer(PtrInt(PtrUInt(C))+vmtClassName)^;
     SetString(result,PAnsiChar(@P^[1]),ord(P^[0]));
   end;
 end;
@@ -35441,7 +35575,7 @@ var P: PShortString;
 begin
   if C=nil then
     result := '' else begin
-    P := PPointer(PtrInt(C)+vmtClassName)^;
+    P := PPointer(PtrInt(PtrUInt(C))+vmtClassName)^;
     SetString(result,PAnsiChar(@P^[1]),ord(P^[0]));
   end;
 end;
@@ -36589,7 +36723,7 @@ begin
     exit; // nothing to redirect to
   assert(sizeof(TPatchCode)=sizeof(NewJump));
   NewJump.Code := $e9;
-  NewJump.Distance := PtrInt(RedirectFunc)-PtrInt(Func)-sizeof(NewJump);
+  NewJump.Distance := integer(PtrUInt(RedirectFunc)-PtrUInt(Func)-sizeof(NewJump));
   PatchCode(Func,@NewJump,sizeof(NewJump),Backup);
   {$ifndef LVCL}
   assert(pByte(Func)^=$e9);
@@ -44192,7 +44326,9 @@ end;
 
 class function TDocVariant.New(Options: TDocVariantOptions): Variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).Init(Options);
 end;
@@ -44200,7 +44336,9 @@ end;
 class function TDocVariant.NewObject(const NameValuePairs: array of const;
   Options: TDocVariantOptions=[]): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitObject(NameValuePairs,Options);
 end;
@@ -44208,7 +44346,9 @@ end;
 class function TDocVariant.NewArray(const Items: array of const;
   Options: TDocVariantOptions=[]): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitArray(Items,Options);
 end;
@@ -44216,7 +44356,9 @@ end;
 class function TDocVariant.NewArray(const Items: TVariantDynArray;
   Options: TDocVariantOptions=[]): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitArrayFromVariants(Items,Options);
 end;
@@ -44230,7 +44372,9 @@ end;
 class function TDocVariant.NewUnique(const SourceDocVariant: variant;
   Options: TDocVariantOptions=[dvoReturnNullForUnknownProperty]): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitCopy(SourceDocVariant,Options);
 end;
@@ -44306,7 +44450,9 @@ end;
 function _Obj(const NameValuePairs: array of const;
   Options: TDocVariantOptions=[]): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitObject(NameValuePairs,Options);
 end;
@@ -44314,7 +44460,9 @@ end;
 function _Arr(const Items: array of const;
   Options: TDocVariantOptions=[]): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitArray(Items,Options);
 end;
@@ -44324,7 +44472,9 @@ var o: PDocVariantData;
 begin
   o := _Safe(Obj);
   if not(dvoIsObject in o^.VOptions) then begin // create new object
+    {$ifndef FPC}
     if TVarData(Obj).VType and VTYPE_STATIC<>0 then
+    {$endif}
       VarClear(Obj);
     TDocVariantData(Obj).InitObject(NameValuePairs,JSON_OPTIONS_FAST);
   end else begin // append new names/values to existing object
@@ -44348,14 +44498,18 @@ end;
 
 function _ObjFast(const NameValuePairs: array of const): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitObject(NameValuePairs,JSON_OPTIONS_FAST);
 end;
 
 function _ObjFast(aObject: TObject; aOptions: TTextWriterWriteObjectOptions): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   if TDocVariantData(result).InitJSONInPlace(
       pointer(ObjectToJson(aObject,aOptions)),JSON_OPTIONS_FAST)=nil then
@@ -44364,7 +44518,9 @@ end;
 
 function _ArrFast(const Items: array of const): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result).InitArray(Items,JSON_OPTIONS_FAST);
 end;
@@ -44433,7 +44589,9 @@ end;
 
 function _ByRef(const DocVariant: variant; Options: TDocVariantOptions): variant;
 begin
+  {$ifndef FPC}
   if TVarData(result).VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   TDocVariantData(result) := _Safe(DocVariant)^; // fast byref copy
   TDocVariantData(result).SetOptions(Options);
@@ -44937,7 +45095,7 @@ function TDynArray.GetCount: integer;
 begin
   if fValue<>nil then
     if fCountP=nil then
-      if PtrInt(fValue^)<>0 then begin
+      if PtrUInt(fValue^)<>0 then begin
         {$ifdef FPC}
         result := PDynArrayRec(PtrUInt(fValue^)-SizeOf(TDynArrayRec))^.length;
         {$else}
@@ -46309,7 +46467,7 @@ begin
     if delta=0 then
       exit;
     fCountP^ := aCount;
-    if PtrInt(fValue^)=0 then begin
+    if PtrUInt(fValue^)=0 then begin
       // no capa yet
       if (delta>0) and (aCount<MINIMUM_SIZE) then
         aCount := MINIMUM_SIZE; // reserve some minimal space for Add()
@@ -46340,7 +46498,7 @@ end;
 
 function TDynArray.GetCapacity: integer;
 begin // capacity := length(DynArray)
-  if (fValue<>nil) and (PtrInt(fValue^)<>0) then
+  if (fValue<>nil) and (PtrUInt(fValue^)<>0) then
     result := PDynArrayRec(PtrUInt(fValue^)-SizeOf(TDynArrayRec))^.length else
     result := 0;
 end;
@@ -48443,7 +48601,7 @@ begin
     FlushToStream;
   with GlobalLogTime[LocalTime] do begin
     if Use16msCache then begin
-      Ticks := GetTickCount; // this call is very fast (just one integer mul)
+      Ticks := GetTickCount64; // this call is very fast (just one integer mul)
       if clock<>Ticks then begin // typically in range of 10-16 ms
         clock := Ticks;
         if LocalTime then
@@ -50281,7 +50439,7 @@ end;
 procedure TTextWriter.AddClassName(aClass: TClass);
 begin
   if aClass<>nil then
-    AddShort(PShortString(PPointer(PtrInt(aClass)+vmtClassName)^)^);
+    AddShort(PShortString(PPointer(PtrInt(PtrUInt(aClass))+vmtClassName)^)^);
 end;
 
 procedure TTextWriter.AddInstanceName(Instance: TObject; SepChar: AnsiChar);
@@ -50996,6 +51154,9 @@ var n: PtrInt;
     field: TNameValuePUTF8Char;
     EndOfObject: AnsiChar;
 begin
+  {$ifdef FPC}
+  Values := nil;
+  {$endif}
   result := nil;
   n := 0;
   if P<>nil then begin
@@ -51680,7 +51841,6 @@ Prop: if not (ord(P^) in IsJsonIdentifierFirstChar) then
 end;
 
 function GotoNextJSONObjectOrArray(P: PUTF8Char; EndChar: AnsiChar=#0): PUTF8Char;
-label Prop;
 begin // should match GetJSONPropName()
   result := nil; // mark error or unexpected end (#0)
   if P^ in [#1..' '] then repeat inc(P) until not(P^ in [#1..' ']);
@@ -52376,7 +52536,6 @@ const
   // Valid characters in a "quoted-string"
   quoted_string_chars: TSynAnsicharSet = [#0..#255] - ['"', #13, '\'];
   // Valid characters in a subdomain
-  letters: TSynAnsicharSet = ['A'..'Z', 'a'..'z'];
   letters_digits: TSynAnsicharSet = ['0'..'9', 'A'..'Z', 'a'..'z'];
 type
   States = (STATE_BEGIN, STATE_ATOM, STATE_QTEXT, STATE_QCHAR,
@@ -56575,7 +56734,10 @@ end;
 
 function TSynMemoryStream.Write(const Buffer; Count: Integer): Longint;
 begin
-  raise EStreamError.Create('TSynMemoryStream.Write');
+  {$ifdef FPC}
+  result := 0; // makes FPC compiler happy
+  {$endif}
+  raise EStreamError.CreateFmt('Unexpected %s.Write',[ClassNameShort(self)^]);
 end;
 
 
@@ -56861,8 +57023,8 @@ end;
 procedure TFileBufferWriter.WriteRawUTF8DynArray(const Values: TRawUTF8DynArray;
   ValuesCount: integer);
 var PI: PPtrUIntArray;
-    n, i, fixedsize: integer;
-    len: PtrUInt;
+    n, i: integer;
+    fixedsize, len: PtrUInt;
     P, PEnd: PByte;
     PBeg: PAnsiChar;
 begin
@@ -56875,7 +57037,7 @@ begin
     for i := 1 to ValuesCount-1 do
       if (PI^[i]=0) or
          ({$ifdef FPC}PStrRec(Pointer(PI^[i]-STRRECSIZE))^.length
-          {$else}PInteger(PI^[i]-sizeof(integer))^{$endif}<>fixedsize) then begin
+          {$else}PCardinal(PI^[i]-sizeof(integer))^{$endif}<>fixedsize) then begin
         fixedsize := 0;
         break;
       end;
@@ -56909,7 +57071,7 @@ begin
         end else
       // fixed size strings case
       for i := 0 to ValuesCount-1 do begin
-        if PtrInt(PEnd)-PtrInt(P)<=fixedsize then begin
+        if PtrUInt(PEnd)-PtrUInt(P)<=fixedsize then begin
           n := i;
           break; // avoid buffer overflow
         end;
@@ -58515,7 +58677,9 @@ var data: TSynTableData absolute result;
 begin
   if SynTableVariantType=nil then
     SynTableVariantType := SynRegisterCustomVariantType(TSynTableVariantType);
+  {$ifndef FPC}
   if data.VType and VTYPE_STATIC<>0 then
+  {$endif}
     VarClear(result);
   data.VType := SynTableVariantType.VarType;
   data.VID := aID;
@@ -62103,7 +62267,7 @@ constructor TSynAuthenticationAbstract.Create;
 begin
   fSafe.Init;
   fTokenSeed := Random32;
-  fSessionGenerator := abs(fTokenSeed*PtrInt(ClassType));
+  fSessionGenerator := abs(fTokenSeed*PPtrInt(self)^);
 end;
 
 destructor TSynAuthenticationAbstract.Destroy;
