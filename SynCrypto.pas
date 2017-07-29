@@ -579,6 +579,15 @@ type
     // the encrypted data
     // - default implementation, for a non AEAD protocol, returns false
     function MACCheckError(aEncrypted: pointer; Count: cardinal): boolean; virtual;
+    /// perform one step PKCS7 encryption/decryption and authentication
+    // - returns '' on any (MAC) issue during decryption (Encrypt=false) or if
+    // this class does not support AEAD MAC
+    // - as used e.g. by CryptDataForCurrentUser()
+    // - do not use this abstract class method, but inherited TAESCFBCRC/TAESOFBCRC
+    // - will store a header with its own CRC, so detection of most invalid
+    // formats will occur before any AES/MAC process
+    class function MACEncrypt(const Data: RawByteString; const Key: THash256;
+      Encrypt: boolean): RawByteString;
 
     /// simple wrapper able to cypher/decypher any in-memory content
     // - here data variables could be text or binary
@@ -747,8 +756,13 @@ type
     procedure Decrypt(BufIn, BufOut: pointer; Count: cardinal); override;
   end;
 
+  /// internal 256-bit structure used for TAESAbstractAEAD MAC storage
   TAESMAC256 = record
+    /// the AES-encrypted MAC of the plain content
+    // - encrypt the plain text crc, to perform message authentication and integrity
     plain: THash128;
+    /// the plain MAC of the encrypted content
+    // - store the encrypted text crc, to check for errors, with no compromission
     encrypted: THash128;
   end;
   
@@ -763,6 +777,9 @@ type
   protected
     fMAC, fMACKey: TAESMAC256;
   public
+    /// release the used instance memory and resources
+    // - also fill the internal internal MAC hashes with zeros, for safety
+    destructor Destroy; override;
     /// initialize 256-bit MAC computation for next Encrypt/Decrypt call
     // - initialize the internal fMACKey property, and returns true
     // - only the plain text crc is seeded from aKey - encrypted message crc
@@ -984,10 +1001,14 @@ type
     /// retrieve some entropy bytes from the Operating System
     // - entropy comes from CryptGenRandom API on Windows, and /dev/urandom or
     // /dev/random on Linux/POSIX
+    // - this system-supplied entropy is then XORed with the output of a SHA-3
+    // cryptographic SHAKE-256 generator in XOF mode, of several entropy sources
+    // (timestamp, thread and system information, Random32 function) unless
+    // SystemOnly is TRUE
     // - depending on the system, entropy may not be true randomness: if you need
     // some truly random values, use TAESPRNG.Main.FillRandom() or TAESPRNG.Fill()
     // methods, NOT this class function (which will be much slower, BTW)
-    class function GetEntropy(Len: integer): RawByteString; virtual;
+    class function GetEntropy(Len: integer; SystemOnly: boolean=false): RawByteString; virtual;
     /// returns a shared instance of a TAESPRNG instance
     // - if you need to generate some random content, just call the
     // TAESPRNG.Main.FillRandom() overloaded methods, or directly TAESPRNG.Fill()
@@ -1083,7 +1104,7 @@ var
 
 /// low-level function returning some random binary using standard API
 // - will call /dev/urandom under POSIX, and CryptGenRandom API on Windows,
-// and fallback to SynCommons.RandomGUID if the system is not supported
+// and fallback to SynCommons.FillRandom if the system is not supported
 // - you should not have to call this procedure, but faster and safer TAESPRNG
 procedure FillSystemRandom(Buffer: PByteArray; Len: integer; AllowBlocking: boolean);
 
@@ -7124,8 +7145,9 @@ end;
 
 procedure TSHA3Context.InitSponge(aRate, aCapacity: integer);
 begin
-  Assert(aRate + aCapacity = 1600, 'Rate+Capacity should be 1600');
-  Assert((aRate > 0) and (aRate < 1600) and ((aRate and 63) = 0), 'Invalid Rate');
+  if (aRate + aCapacity <> 1600) or (aRate <= 0) or (aRate >= 1600) or
+     ((aRate and 63) <> 0) then
+    raise ESynCrypto.CreateUTF8('Unexpected TSHA3Context.Init(%,%)', [aRate, aCapacity]);
   FillCharFast(self, sizeof(self), 0);
   Rate := aRate;
   Capacity := aCapacity;
@@ -7151,8 +7173,10 @@ var
   partialByte: integer;
   curData: pointer;
 begin
-  Assert(BitsInQueue and 7 = 0, 'Only the last call may contain a partial byte');
-  Assert(not Squeezing, 'Too late for additional input');
+  if BitsInQueue and 7 <> 0 then
+    raise ESynCrypto.Create('TSHA3Context.Absorb: only last may contain partial');
+  if Squeezing then
+    raise ESynCrypto.Create('TSHA3Context.Absorb: too late for additional input');
   i := 0;
   while i < databitlen do begin
     if (BitsInQueue = 0) and (databitlen >= Rate) and (i <= (databitlen - Rate)) then begin
@@ -7231,7 +7255,8 @@ var
 begin
   if not Squeezing then
     PadAndSwitchToSqueezingPhase;
-  Assert(outputLength and 7 = 0, 'outputLength is not a multiple of 8 bits');
+  if outputLength and 7 <> 0 then
+    raise ESynCrypto.CreateUTF8('TSHA3Context.Squeeze(%?)', [outputLength]);
   i := 0;
   while i < outputLength do begin
     if BitsAvailableForSqueezing = 0 then begin
@@ -7533,7 +7558,7 @@ begin
   case KeySize div 8 of
   0:   result := 0;
   1:   result := PByte(@Key)^;
-  2,3: result := pWord(@Key)^;
+  2,3: result := PWord(@Key)^;
   else result := PInteger(@Key)^;
   end;
 end;
@@ -7804,7 +7829,7 @@ begin
     s2 := s2 mod 65521;
     dec(Count,n);
   end;
-  result := word(s1)+cardinal(word(s2)) shl 16;
+  result := (s1 and $ffff)+(s2 and $ffff) shl 16;
 end;
 
 function Adler32Asm(Adler: cardinal; p: pointer; Count: Integer): cardinal;
@@ -8005,7 +8030,6 @@ begin
   Dest.Write(Buffer,Count);
   inc(DestSize,Count);
 end;
-
 
 procedure XorBlock(p: PIntegerArray; Count, Cod: integer);
 // very fast Xor() according to Cod - not Compression or Stream compatible
@@ -9331,7 +9355,7 @@ begin
   Decrypt(@PByteArray(Input)^[ivsize],P,InputLen);
   padding := ord(P[InputLen-1]); // result[1..len]
   if padding>sizeof(TAESBlock) then
-    result := '' else
+    result := '' else // invalid input
     if P=@tmp then
       SetString(result,P,InputLen-padding) else
       SetLength(result,InputLen-padding); // fast in-place resize
@@ -9377,6 +9401,66 @@ end;
 function TAESAbstract.MACCheckError(aEncrypted: pointer; Count: cardinal): boolean;
 begin
   result := false;
+end;
+
+class function TAESAbstract.MACEncrypt(const Data: RawByteString; const Key: THash256;
+  Encrypt: boolean): RawByteString;
+type
+  TCryptData = packed record
+    nonce,mac: THash256;
+    crc: cardinal;
+    data: RawByteString;
+  end;
+  PCryptData = ^TCryptData;
+const
+  VERSION = 1;
+  CRCSIZ = sizeof(THash256)*2;
+  SIZ = CRCSIZ+sizeof(cardinal);
+var aes: TAESAbstract;
+    rec: TCryptData;
+    len: integer;
+    pcd: PCryptData absolute Data;
+    P: PAnsiChar;
+begin
+  result := ''; // e.g. MACSetNonce not supported
+  try
+    if Encrypt then begin
+      TAESPRNG.Main.FillRandom(rec.nonce);
+      aes := Create(Key);
+      try
+        if not aes.MACSetNonce(rec.nonce) then
+          exit;
+        rec.Data := aes.EncryptPKCS7(Data,true);
+        if not aes.MACGetLast(rec.mac) then
+          exit;
+      finally
+        aes.Free;
+      end;
+      rec.crc := crc32c(VERSION,@rec.nonce,CRCSIZ);
+      result := RecordSave(rec,TypeInfo(TCryptData));
+    end else begin
+      if (length(Data)<=SIZ) or (pcd^.crc<>crc32c(VERSION,pointer(pcd),CRCSIZ)) then
+        exit;
+      P := @pcd^.data; // inlined RecordLoad() for safety
+      len := FromVarUInt32(PByte(P));
+      if length(Data)-len<>P-pointer(Data) then
+        exit; // avoid buffer overflow
+      aes := Create(Key);
+      try
+        if aes.MACSetNonce(pcd^.nonce) then
+          result := aes.DecryptPKCS7Buffer(P,len,true);
+        if result<>'' then
+          if not aes.MACEquals(pcd^.mac) then begin
+            FillZero(result);
+            result := '';
+          end;
+      finally
+        aes.Free;
+      end;
+    end;
+  finally
+    FillZero(rec.data);
+  end;
 end;
 
 class function TAESAbstract.SimpleEncrypt(const Input,Key: RawByteString;
@@ -9712,12 +9796,19 @@ end;
 
 { TAESAbstractAEAD }
 
+destructor TAESAbstractAEAD.Destroy;
+begin
+  inherited Destroy;
+  FillCharFast(fMacKey,sizeof(fMacKey),0);
+  FillCharFast(fMac,sizeof(fMac),0);
+end;
+
 function TAESAbstractAEAD.MACSetNonce(const aKey: THash256; aAssociated: pointer;
   aAssociatedLen: integer): boolean;
 var rec: THash256Rec absolute aKey;
 begin
   // safe seed for plain text crc, before AES encryption
-  // from TECDHEProtocol.SetKey, aKey is a CTR to avoid replay attacks
+  // from TECDHEProtocol.SetKey, aKey is a public nonce to avoid replay attacks
   fMACKey.plain := rec.Lo;
   XorBlock16(@fMACKey.plain,@rec.Hi);
   // neutral seed for encrypted crc, to check for errors, with no compromission
@@ -10377,70 +10468,53 @@ function CreateGuid(out guid: TGUID): HResult; stdcall;
   external 'ole32.dll' name 'CoCreateGuid';
 {$endif}
 
-class function TAESPRNG.GetEntropy(Len: integer): RawByteString;
-var time: Int64;
-    ext: TSynExtended;
-    threads: array[0..2] of TThreadID;
-    version: RawByteString;
-    hmac: THMAC_SHA256;
-    entropy: array[0..3] of THash256; // 128 bytes
-    paranoid: cardinal;
-    p: PByteArray;
-    i: integer;
-  procedure hmacInit;
-  var timenow: Int64;
-      g: TGUID;
-      i,val: cardinal;
+class function TAESPRNG.GetEntropy(Len: integer; SystemOnly: boolean): RawByteString;
+var ext: TSynExtended;
+    data: THash512Rec;
+    fromos, version: RawByteString;
+    sha3: TSHA3;
+  procedure sha3update;
+  var g: TGUID;
   begin
-    hmac.Init(@entropy,sizeof(entropy)); // bytes on CPU stack
-    hmac.Update(@time,sizeof(time));
-    hmac.Update(ExeVersion.Hash.b);
-    QueryPerformanceCounter(timenow);
-    hmac.Update(@timenow,sizeof(timenow)); // include GetEntropy() execution time
-    val := UnixTimeUTC;
-    hmac.Update(@val,sizeof(val));
-    for i := 0 to timenow and 3 do begin
-      CreateGUID(g); // not random, but genuine
-      hmac.Update(@g,sizeof(g));
-    end;
-    for i := 1 to (Random32 and 15)+2 do begin
-      val := Random32; // RDRAND Intel x86/x64 opcode or gsl_rng_taus2()
-      hmac.Update(@val,sizeof(val));
-    end;
+    SynCommons.FillRandom(@data.Hi,8); // QueryPerformanceCounter+8*Random32
+    sha3.Update(@data,sizeof(data));
+    CreateGUID(g); // not random, but genuine
+    sha3.Update(@g,sizeof(g));
   end;
 begin
-  QueryPerformanceCounter(time);
-  // retrieve some initial entropy from OS
-  SetLength(result,Len);
-  p := pointer(result);
-  FillSystemRandom(p,len,true);
-  // always xor some explicit entropy - it won't hurt
-  hmacInit;
-  version := RecordSave(ExeVersion,TypeInfo(TExeVersion));
-  hmac.Update(pointer(version),length(version)); // exe and host/user info
-  hmac.Done(entropy[3]);
-  hmacInit;
-  ext := NowUTC;
-  hmac.Update(@ext,sizeof(ext));
-  hmac.Done(entropy[2]);
-  hmacInit;
-  ext := Random;
-  hmac.Update(@ext,sizeof(ext));
-  threads[0] := TThreadID(HInstance);
-  threads[1] := {$ifdef BSD}Cardinal{$endif}(GetCurrentThreadId);
-  threads[2] := {$ifdef BSD}Cardinal{$endif}(MainThreadID);
-  hmac.Update(@threads,sizeof(threads));
-  hmac.Done(entropy[1]);
-  hmacInit;
-  hmac.Update(@SystemInfo,sizeof(SystemInfo));
-  hmac.Update(pointer(OSVersionText),Length(OSVersionText));
-  SleepHiRes(0); // force non deterministic time shift
-  QueryPerformanceCounter(time);
-  hmac.Update(@time,sizeof(time)); // include GetEntropy() execution time
-  hmac.Done(entropy[0]);
-  for i := 0 to Len-1 do begin
-    paranoid := PByteArray(@entropy)^[i and (sizeof(entropy)-1)];
-    p^[i] := p^[i] xor Xor32Byte[(cardinal(p^[i]) shl 5) xor paranoid] xor paranoid;
+  QueryPerformanceCounter(data.d0); // data.d1 = some bytes on stack
+  try
+    // retrieve some initial entropy from OS
+    SetLength(fromos,Len);
+    FillSystemRandom(pointer(fromos),len,true);
+    if SystemOnly then begin
+      result := fromos;
+      fromos := '';
+      exit;
+    end;
+    // xor some explicit entropy - it won't hurt
+    sha3.Init(SHAKE_256); // used in XOF mode for variable-length output
+    sha3update;
+    data.h1 := ExeVersion.Hash.b;
+    version := RecordSave(ExeVersion,TypeInfo(TExeVersion));
+    sha3.Update(pointer(version),length(version)); // exe and host/user info
+    ext := NowUTC;
+    sha3.Update(@ext,sizeof(ext));
+    sha3update;
+    ext := Random; // why not?
+    sha3.Update(@ext,sizeof(ext));
+    data.i0 := integer(HInstance); // override data.d0d1/h0
+    data.i1 := integer(GetCurrentThreadId);
+    data.i2 := integer(MainThreadID);
+    data.i3 := integer(UnixTimeUTC);
+    SleepHiRes(0); // force non deterministic time shift
+    sha3update;
+    sha3.Update(pointer(OSVersionText),Length(OSVersionText));
+    sha3.Update(@SystemInfo,sizeof(SystemInfo));
+    result := sha3.Cypher(fromos); // = XOR entropy using SHA-3 in XOF mode
+  finally
+    sha3.Done;
+    FillZero(fromos);
   end;
 end;
 
@@ -10935,12 +11009,14 @@ end;
 
 var
   __h: THash256;
+  __hmac: THMAC_SHA256; // initialized from CryptProtectDataEntropy salt
 
-procedure read__h;
+procedure read__h__hmac;
 var keyfile: TFileName;
     instance: THash256;
     key,key2,appsec: RawByteString;
 begin
+  __hmac.Init(@CryptProtectDataEntropy,32);
   SetString(appsec,PAnsiChar(@CryptProtectDataEntropy),32);
   PBKDF2_HMAC_SHA256(appsec,ExeVersion.User,100,instance);
   FillZero(appsec);
@@ -10991,59 +11067,27 @@ begin
     FillZero(key);
     FillZero(key2);
     FillZero(appsec);
+    FillZero(instance);
   end;
 end;
 
 function CryptDataForCurrentUser(const Data,AppSecret: RawByteString; Encrypt: boolean): RawByteString;
-type
-  TCryptData = packed record
-    nonce,mac: THash256;
-    crc: cardinal;
-    data: RawByteString;
-  end;
-  PCryptData = ^TCryptData;
-const
-  VERSION = 1;
-var aes: TAESCFBCRC;
-    rec: TCryptData;
-    hmac: THMAC_SHA256;
+var hmac: THMAC_SHA256;
     secret: THash256;
 begin
   result := '';
   if Data='' then
     exit;
   if IsZero(__h) then
-    read__h;
-  hmac.Init(@CryptProtectDataEntropy,sizeof(CryptProtectDataEntropy));
-  hmac.Update(AppSecret);
-  hmac.Update(__h);
-  hmac.Done(secret);
-  aes := TAESCFBCRC.Create(secret);
+    read__h__hmac;
   try
-    FillZero(secret);
-    if Encrypt then begin
-      TAESPRNG.Main.FillRandom(rec.nonce);
-      aes.MACSetNonce(rec.nonce);
-      rec.Data := aes.EncryptPKCS7(Data,true);
-      aes.MACGetLast(rec.mac);
-      rec.crc := crc32c(VERSION,@rec.nonce,64);
-      result := RecordSave(rec,TypeInfo(TCryptData));
-    end else begin
-      if (length(Data)<68) or
-         (PCryptData(Data)^.crc<>crc32c(VERSION,pointer(data),64)) or
-         (RecordLoad(rec,Pointer(Data),TypeInfo(TCryptData))=nil) then
-        exit;
-      aes.MACSetNonce(rec.nonce);
-      result := aes.DecryptPKCS7(rec.Data,true);
-      if result<>'' then
-        if not aes.MACEquals(rec.mac) then begin
-          FillZero(result);
-          result := '';
-        end;
-    end;
+    hmac := __hmac; // thread-safe reuse of CryptProtectDataEntropy salt
+    hmac.Update(AppSecret);
+    hmac.Update(__h);
+    hmac.Done(secret);
+    result := TAESCFBCRC.MACEncrypt(Data,secret,Encrypt);
   finally
-    FillZero(rec.data);
-    aes.Free;
+    FillZero(secret);
   end;
 end;
 

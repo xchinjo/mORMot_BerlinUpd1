@@ -21026,7 +21026,8 @@ begin
     SetString(RawUTF8(result.VAny),Value,StrLen(Value));
   sftBlobCustom, sftBlob:
     RawByteString(result.VAny) := BlobToTSQLRawBlob(Value);
-  sftBlobDynArray, sftObject, sftVariant, sftUTF8Custom, sftNullable: begin
+  {$ifndef NOVARIANTS}sftVariant, sftNullable,{$endif}
+  sftBlobDynArray, sftObject, sftUTF8Custom: begin
     if (fieldType=sftBlobDynArray) and (typeInfo<>nil) and
        (Value<>nil) and (Value^<>'[') and
        Base64MagicCheckAndDecode(Value,tmp) then
@@ -21087,7 +21088,17 @@ procedure TSQLPropInfo.CopyProp(Source: TObject; DestInfo: TSQLPropInfo; Dest: T
   procedure GenericCopy;
   var tmp: RawUTF8;
       wasString: boolean;
+      {$ifndef NOVARIANTS}
+      val: variant;
+      {$endif}
   begin
+    {$ifndef NOVARIANTS} // force JSON serialization, e.g. for dynamic arrays
+    if (DestInfo.SQLFieldType=sftVariant) or (SQLfieldType=sftVariant) then begin
+      GetVariant(Source,val);
+      DestInfo.SetVariant(Dest,val);
+      exit;
+    end;
+    {$endif}
     GetValueVar(Source,false,tmp,@wasString);
     DestInfo.SetValueVar(Dest,tmp,wasString);
   end;
@@ -24904,12 +24915,14 @@ begin
           ContentTypeInfo := PTypeInfo(FieldTypeInfo)^.SetEnumType;
       sftBlobDynArray:
         ContentTypeInfo := FieldTypeInfo;
+      {$ifndef NOVARIANTS}
       sftNullable: begin
         ContentTypeInfo := FieldTypeInfo;
         ContentType := NullableTypeToSQLFieldType(FieldTypeInfo);
         if ContentType=sftUnknown then
           ContentType := sftNullable;
       end;
+      {$endif}
       end;
     TableIndex := FieldTableIndex;
   end;
@@ -25174,7 +25187,7 @@ begin
   end else
   if (PInteger(P)^ and $00ffffff=JSON_BASE64_MAGIC) and IsBase64(@P[3],Len-3) then begin
     // Base-64 encoded content ('\uFFF0base64encodedbinary')
-    result := Base64ToBin(@P[3],Len-3);
+    Base64ToBin(@P[3],Len-3,RawByteString(result));
     exit;
   end;
   // TEXT format
@@ -25200,7 +25213,7 @@ begin
   end else
   if (PInteger(P)^ and $00ffffff=JSON_BASE64_MAGIC) and IsBase64(@P[3],Len-3) then begin
     // Base-64 encoded content ('\uFFF0base64encodedbinary')
-    result := Base64ToBin(@P[3],Len-3);
+    Base64ToBin(@P[3],Len-3,RawByteString(result));
     exit;
   end;
   // TEXT format
@@ -27210,10 +27223,14 @@ begin
     if Source.VType<>VarType then
       RaiseCastError;
     r := TSQLTableRowVariantData(Source).VRow;
-    if r<0 then
+    if r<0 then 
       r := TSQLTableRowVariantData(Source).VTable.fStepRow;
     TSQLTableRowVariantData(Source).VTable.ToDocVariant(r,tmp);
-    RawUTF8ToVariant(VariantSaveJSON(tmp),Dest,AVarType);
+    if AVarType=DocVariantVType then begin
+      VarClear(variant(Dest));
+      TDocVariantData(Dest) := TDocVariantData(tmp);
+    end else
+      RawUTF8ToVariant(VariantSaveJSON(tmp),Dest,AVarType);
   end;
 end;
 
@@ -31275,6 +31292,7 @@ begin
     W.Add(',');
 end;
 
+{$ifndef NOVARIANTS}
 procedure TSQLRecord.ForceVariantFieldsOptions(aOptions: TDocVariantOptions);
 var i: integer;
 begin
@@ -31289,6 +31307,7 @@ begin
           if Count>0 then
             Options := aOptions;
 end;
+{$endif}
 
 procedure TSQLRecord.GetJSONValuesAndFree(JSON : TJSONSerializer);
 begin
@@ -36760,9 +36779,7 @@ procedure TRemoteLogThread.AddRow(const aText: RawUTF8);
 begin
   fSafe.Lock;
   try
-    if fPendingRows='' then
-      fPendingRows := aText else
-      fPendingRows := fPendingRows+#13#10+aText;
+    AddToCSV(aText,fPendingRows,#13#10);
   finally
     fSafe.UnLock;
   end;
@@ -37895,14 +37912,12 @@ begin
   // #1 is a field delimiter below, since Get*Item() functions return nil for #0
   Msg.Result := HTTP_SUCCESS; // Send something back
   call.Init;
-  call.Url := GetNextItem(P,#1);
-  call.Method := GetNextItem(P,#1);
-  call.InHead := GetNextItem(P,#1);
+  GetNextItem(P,#1,call.Url);
+  GetNextItem(P,#1,call.Method);
+  GetNextItem(P,#1,call.InHead);
   call.LowLevelConnectionID := Msg.From;
   Header := 'RemoteIP: 127.0.0.1';
-  if call.InHead='' then
-    call.InHead := Header else
-    call.InHead := call.InHead+#13#10+Header;
+  AddToCSV(Header,call.InHead,#13#10);
   SetString(call.InBody,P,PtrInt(input^.cbData)-(P-input^.lpData));
   call.RestAccessRights := @SUPERVISOR_ACCESS_RIGHTS;
   // note: it's up to URI overridden method to implement access rights
@@ -40654,11 +40669,8 @@ end;
 procedure TSQLRestServerURIContext.ReturnBlob(const Blob: RawByteString;
   Status: integer; Handle304NotModified: boolean; const FileName: TFileName);
 begin
-  if not ExistsIniName(pointer(Call.OutHead),HEADER_CONTENT_TYPE_UPPER) then begin
-    if Call.OutHead<>'' then
-      Call.OutHead := Call.OutHead+#13#10;
-    Call.OutHead := Call.OutHead+GetMimeContentTypeHeader(Blob,FileName);
-  end;
+  if not ExistsIniName(pointer(Call.OutHead),HEADER_CONTENT_TYPE_UPPER) then
+    AddToCSV(GetMimeContentTypeHeader(Blob,FileName),Call.OutHead,#13#10);
   Returns(Blob,Status,Call.OutHead,Handle304NotModified);
 end;
 
@@ -41453,7 +41465,7 @@ begin
       4: result.Content := SessionsAsJson;
       5,6: begin
         PrepareCall;
-        call.Method := GetNextItem(P,' '); // GET or POST
+        GetNextItem(P,' ',call.Method); // GET or POST
         if P<>nil then
           call.Url := call.Url+'/'+RawUTF8(P);
         URI(call);
@@ -41852,12 +41864,12 @@ var i, tc: integer;
     CurrentThreadId: TThreadID;
 begin
   tc := fStats.NotifyThreadCount(1);
-  CurrentThreadId := {$ifdef BSD}Cardinal{$endif}(GetCurrentThreadId);
+  CurrentThreadId := TThreadID(GetCurrentThreadId);
   if Sender=nil then
     raise ECommunicationException.CreateUTF8('%.BeginCurrentThread(nil)',[self]);
   InternalLog('BeginCurrentThread(%) root=% ThreadID=% ThreadCount=%',
     [Sender.ClassType,Model.Root,pointer(CurrentThreadId),tc]);
-  if {$ifdef BSD}Cardinal{$endif}(Sender.ThreadID)<>CurrentThreadId then
+  if TThreadID(Sender.ThreadID)<>CurrentThreadId then
     raise ECommunicationException.CreateUTF8(
       '%.BeginCurrentThread(Thread.ID=%) and CurrentThreadID=% should match',
       [self,Sender.ThreadID,CurrentThreadId]);
@@ -41879,12 +41891,12 @@ var i, tc: integer;
     Inst: TServiceFactoryServerInstance;
 begin
   tc := fStats.NotifyThreadCount(-1);
-  CurrentThreadId := {$ifdef BSD}Cardinal{$endif}(GetCurrentThreadId);
+  CurrentThreadId := TThreadID(GetCurrentThreadId);
   if Sender=nil then
     raise ECommunicationException.CreateUTF8('%.EndCurrentThread(nil)',[self]);
   InternalLog('EndCurrentThread(%) ThreadID=% ThreadCount=%',
     [Sender.ClassType,pointer(CurrentThreadId),tc]);
-  if {$ifdef BSD}Cardinal{$endif}(Sender.ThreadID)<>CurrentThreadId then
+  if TThreadID(Sender.ThreadID)<>CurrentThreadId then
     raise ECommunicationException.CreateUTF8(
       '%.EndCurrentThread(%.ID=%) should match CurrentThreadID=%',
       [self,Sender,Sender.ThreadID,CurrentThreadId]);
@@ -43322,12 +43334,12 @@ procedure TSQLRestServerNamedPipeResponse.InternalExecute;
 var call: TSQLRestURIParams;
     Sleeper, Code: integer;
     Ticks64, ClientTimeOut64: Int64;
-    Header: RawUTF8;
+    RemoteIPHeader: RawUTF8;
     Available: cardinal;
 begin
   if (fPipe=0) or (fPipe=Cardinal(INVALID_HANDLE_VALUE)) or (fServer=nil) then
     exit;
-  Header := 'RemoteIP: 127.0.0.1';
+  RemoteIPHeader := 'RemoteIP: 127.0.0.1';
   call.Init;
   call.LowLevelConnectionID := fPipe;
   call.LowLevelFlags := [llfSecured]; // assume pipes communication is safe
@@ -43345,9 +43357,7 @@ begin
           call.Url := ReadString(fPipe);
           call.Method := ReadString(fPipe);
           call.InHead := ReadString(fPipe);
-          if call.InHead='' then
-            call.InHead := Header else
-            call.InHead := call.InHead+#13#10+Header;
+          AddToCSV(RemoteIPHeader,call.InHead,#13#10);
           call.InBody := ReadString(fPipe);
           call.RestAccessRights := @SUPERVISOR_ACCESS_RIGHTS;
           call.OutHead := ''; // may not be reset explicitly by fServer.URI()
@@ -44337,7 +44347,7 @@ begin
     exit;
   end;
   P := GotoNextNotSpace(P+6);
-  Prop := GetNextItem(P,'=');
+  GetNextItem(P,'=',Prop);
   if (P=nil) or (fStoredClassRecordProps.Fields.IndexByName(Prop)<0) then
     exit;
   if PWord(P)^=ord(':')+ord('(') shl 8 then
@@ -48755,7 +48765,7 @@ begin
       end;
       if Call.OutStatus=0 then
         Call.OutStatus := HTTP_NOTFOUND else begin
-        Call.OutHead := GetNextItem(P,#1);
+        GetNextItem(P,#1,Call.OutHead);
         if P<>nil then
           SetString(Call.OutBody,P,length(fCurrentResponse)-(P-pointer(fCurrentResponse)));
       end;
@@ -52474,7 +52484,7 @@ begin
       if fListInterfaceMethod[i].InterfaceMethodIndex<SERVICE_PSEUDO_METHOD_COUNT then
         include(bits,i);
   while MethodNamesCSV<>nil do begin
-    method := GetNextItem(MethodNamesCSV);
+    GetNextItem(MethodNamesCSV,',',method);
     if PosEx('.',method)=0 then begin
       for i := 0 to n-1 do
       with fListInterfaceMethod[i] do // O(n) search is fast enough here
@@ -53379,7 +53389,7 @@ begin
   {$ifdef FPC}tkAString,{$endif} tkLString:
     if P=TypeInfo(RawJSON) then
       result := smvRawJSON else
-    if P=TypeInfo(RawByteString) then
+    if (P=TypeInfo(RawByteString)) or (P=TypeInfo(TSQLRawBlob)) then
       result := smvRawByteString else
   {$ifndef UNICODE}
     if P=TypeInfo(AnsiString) then
@@ -53404,7 +53414,7 @@ begin
           oException,oCustomReaderWriter]) then
       result := smvObject; // JSONToObject/ObjectToJSON types
   {$ifdef FPC}tkObject,{$endif} tkRecord:
-    // Base64 encoding of our RecordLoad / RecordSave binary format
+    // JSON or Base64 encoding of our RecordLoad / RecordSave binary format
     result := smvRecord;
   {$ifndef NOVARIANTS}
   tkVariant:
@@ -60722,7 +60732,7 @@ end;
 procedure SetThreadNameWithLog(ThreadID: TThreadID; const Name: RawUTF8);
 begin
   {$ifdef WITHLOG}
-  if (SetThreadNameLog<>nil) and (ThreadID={$ifdef BSD}Cardinal{$endif}(GetCurrentThreadId)) then
+  if (SetThreadNameLog<>nil) and (ThreadID=TThreadID(GetCurrentThreadId)) then
     SetThreadNameLog.Add.LogThreadName(Name);
   {$endif}
   SetThreadNameDefault(ThreadID,Name);
@@ -60739,7 +60749,7 @@ initialization
   {$ifndef USENORMTOUPPER}
   pointer(@SQLFieldTypeComp[sftUTF8Text]) := @AnsiIComp;
   {$endif}
-  SetThreadNameDefault({$ifdef BSD}Cardinal{$endif}(GetCurrentThreadID),'Main Thread');
+  SetThreadNameDefault(TThreadID(GetCurrentThreadID),'Main Thread');
   SetThreadNameInternal := SetThreadNameWithLog;
   GarbageCollectorFreeAndNil(JSONCustomParsers,TSynDictionary.Create(
     TypeInfo(TClassDynArray),TypeInfo(TJSONCustomParsers)));

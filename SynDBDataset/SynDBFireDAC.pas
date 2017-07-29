@@ -257,7 +257,7 @@ begin
     [FIREDAC_PROVIDER[fDBMS],fUserId,fPassWord,fDatabaseName]));
   opt := pointer(options);
   while opt<>nil do begin
-    namevalue := GetNextItem(opt,';');
+    GetNextItem(opt,';',namevalue);
     if namevalue<>'' then
       fFireDACOptions.Add(UTF8ToString(namevalue));
   end;
@@ -421,7 +421,6 @@ begin
   inherited Create(aProperties);
   fDatabase := TADConnection.Create(nil);
   fDatabase.ResourceOptions.SilentMode := True; // no need for wait cursor
-    fDatabase.ResourceOptions.AutoReconnect := True;
   fDatabase.Params.Text :=
     (fProperties as TSQLDBFireDACConnectionProperties).fFireDACOptions.Text;
 end;

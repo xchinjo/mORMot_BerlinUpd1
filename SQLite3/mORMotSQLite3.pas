@@ -1921,12 +1921,12 @@ var ndx,f,r,prop,fieldCount,valuesCount,
     Decode: TJSONObjectDecoder;
     tmp: TSynTempBuffer;
 begin
+  if (fBatchValuesCount=0) or (fBatchTableIndex<0) then
+    exit; // nothing to add
   if fBatchMethod<>mPOST then
     raise EORMException.CreateUTF8('%.InternalBatchStop: BatchMethod=%',
       [self,ToText(fBatchMethod)^]);
   try
-    if (fBatchValuesCount=0) or (fBatchTableIndex<0) then
-      exit; // nothing to add
     if fBatchValuesCount<>fBatchIDCount then
       raise EORMException.CreateUTF8('%.InternalBatchStop(*Count?)',[self]);
     UpdateEventNeeded := InternalUpdateEventNeeded(fBatchTableIndex);
@@ -2148,9 +2148,7 @@ procedure TSQLRestClientDB.InternalURI(var call: TSQLRestURIParams);
 begin
   if fInternalHeader='' then
     fInternalHeader := 'RemoteIP: 127.0.0.1'#13#10'ConnectionID: '+PointerToHex(self);
-  if call.InHead<>'' then
-    call.InHead := call.InHead+#13#10+fInternalHeader else
-    call.InHead := fInternalHeader;
+  AddToCSV(fInternalHeader,call.InHead,#13#10);
   call.RestAccessRights := @FULL_ACCESS_RIGHTS;
   fServer.URI(call);
   if (call.OutInternalState=0) and (fServer.DB.InternalState<>nil) then

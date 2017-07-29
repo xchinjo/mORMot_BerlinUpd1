@@ -3064,7 +3064,7 @@ begin
   check(not IsZero(crc1));
   check(IsEqual(crc1,crc2));
   FillZero(crc1);
-  crcblockpas(@crc1,PBlock128(PAnsiChar('0123456789012345')));
+  crcblockNoSSE42(@crc1,PBlock128(PAnsiChar('0123456789012345')));
   check(not IsZero(crc1));
   check(IsEqual(crc1,crc2));
   {$endif}
@@ -3078,7 +3078,7 @@ begin
     check(not IsZero(crc2));
     check(IsEqual(crc1,crc2));
     FillZero(crc2);
-    crcblockpas(@crc2,@digest);
+    crcblockNoSSE42(@crc2,@digest);
     check(not IsZero(crc2));
     check(IsEqual(crc1,crc2));
     {$endif}
@@ -3275,6 +3275,7 @@ begin
     Check(FormatUTF8('?%',[j])='?'+s);
     Check(FormatUTF8('?%?',[j])='?'+s+'?');
     Check(FormatUTF8('?%%?',[j])='?'+s+'?');
+    Check(FormatUTF8('?%?%  ',[j])='?'+s+'?  ');
     Check(FormatUTF8('?%',[],[j])=':('+s+'):');
     Check(FormatUTF8('%?',[j],[j])=s+':('+s+'):');
     Check(FormatUTF8('%?',[s],[s])=s+':('''+s+'''):');
@@ -9631,7 +9632,11 @@ var b: TBenchmark;
     timer: TPrecisionTimer;
     time: array[TBenchmark] of Int64;
     AES: array[bAES128CFB .. bAES256OFBCRC] of TAESAbstract;
+    TXT: array[TBenchmark] of RawUTF8;
 begin
+  GetEnumTrimmedNames(TypeInfo(TBenchmark),@TXT);
+  for b := low(b) to high(b) do
+    TXT[b] := LowerCase(TXT[b]);
   for b := low(AES) to high(AES) do
     AES[b] := AESCLASS[b].Create(dig, AESBITS[b]);
   SHAKE128.InitCypher('secret', SHAKE_128);
@@ -9663,8 +9668,7 @@ begin
         Check((b >= bAES128CFB) or (dig.d0 <> 0));
       end;
       if false then // if true then = detailed per block size information
-        NotifyTestSpeed(format('%s %s',[GetEnumNameTrimed(TypeInfo(TBenchMark), b),
-          KB(SIZ[s])]), COUNT, SIZ[s] * COUNT, @timer);
+        NotifyTestSpeed(format('%s %s',[TXT[b], KB(SIZ[s])]), COUNT, SIZ[s] * COUNT, @timer);
       timer.ComputeTime;
       inc(time[b],timer.LastTimeInMicroSec);
     end;
@@ -9673,8 +9677,8 @@ begin
   end;
   for b := low(b) to high(b) do
     AddConsole(format('%d %s in %s i.e. %d/s or %s/s',
-      [n,GetEnumNameTrimed(TypeInfo(TBenchMark), b),MicroSecToString(time[b]),
-       (n*Int64(1000*1000)) div time[b],KB((size*Int64(1000*1000)) div time[b])]));
+      [n, TXT[b], MicroSecToString(time[b]), (n*Int64(1000*1000)) div time[b],
+       KB((size*Int64(1000*1000)) div time[b])]));
   for b := low(AES) to high(AES) do
     AES[b].Free;
 end;
@@ -12378,7 +12382,7 @@ var res: ISQLDBRows;
     id,lastid,n,n1: integer;
     IDs: TIntegerDynArray;
     {$ifndef LVCL}
-    Row: variant;
+    Row,RowDoc: variant;
     {$endif}
 procedure DoInsert;
 var i: integer;
@@ -12427,6 +12431,9 @@ begin
     {$else}
     Check(Row.ID>0);
     Check(Row.YearOfDeath=1519);
+    res.RowDocVariant(RowDoc);
+    Check(RowDoc.ID=Row.ID);
+    Check(_Safe(RowDoc)^.I['YearOfDeath']=1519);
     {$endif}
     inc(n);
   until not res.Step;
@@ -14287,17 +14294,17 @@ end;
 
 function GetThreadID: TThreadID;
 begin // avoid name conflict with TServiceComplexCalculator.GetCurrentThreadID
-  result := {$ifdef BSD}Cardinal{$endif}(GetCurrentThreadId);
+  result := TThreadID(GetCurrentThreadId);
 end;
 
 procedure TServiceComplexCalculator.EnsureInExpectedThread;
 begin
   case GlobalInterfaceTestMode of
   itmDirect, itmClient, itmMainThread:
-    if GetThreadID<>{$ifdef BSD}Cardinal{$endif}(MainThreadID) then
+    if GetThreadID<>TThreadID(MainThreadID) then
       raise Exception.Create('Shall be in main thread');
   itmPerInterfaceThread, itmHttp, itmLocked:
-    if GetThreadID={$ifdef BSD}Cardinal{$endif}(MainThreadID) then
+    if GetThreadID=TThreadID(MainThreadID) then
       raise Exception.Create('Shall NOT be in main thread') else
     if ServiceContext.RunningThread=nil then
       raise Exception.Create('Shall have a known RunningThread');
@@ -14457,7 +14464,7 @@ begin
     raise Exception.Create('Unexpected Thread=nil');
   if Thread=nil then
     result := 0 else begin
-    result := {$ifdef BSD}Cardinal{$endif}(Thread.ThreadID);
+    result := TThreadID(Thread.ThreadID);
     if result<>GetThreadID then
       raise Exception.Create('Unexpected ThreadID');
   end;
@@ -14597,9 +14604,9 @@ begin
   end;
   case GlobalInterfaceTestMode of
   itmMainThread:
-    Check(Inst.CC.GetCurrentThreadID={$ifdef BSD}Cardinal{$endif}(MainThreadID));
+    Check(Inst.CC.GetCurrentThreadID=TThreadID(MainThreadID));
   itmPerInterfaceThread,itmLocked:
-    Check(Inst.CC.GetCurrentThreadID<>{$ifdef BSD}Cardinal{$endif}(MainThreadID));
+    Check(Inst.CC.GetCurrentThreadID<>TThreadID(MainThreadID));
   end;
   TestCalculator(Inst.I);
   TestCalculator(Inst.CC); // test the fact that CC inherits from ICalculator
@@ -14734,7 +14741,7 @@ begin
   end;
   itmHttp: begin
     Check(Inst.CT.GetCurrentRunningThreadID<>TThreadID(0));
-    Check(Inst.CT.GetCurrentThreadID<>{$ifdef BSD}Cardinal{$endif}(MainThreadID));
+    Check(Inst.CT.GetCurrentThreadID<>TThreadID(MainThreadID));
     Check(Inst.CT.GetContextServiceInstanceID<>0);
   end;
   end;
