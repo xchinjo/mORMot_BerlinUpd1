@@ -463,7 +463,7 @@ begin
     PWORDBOOL(Dest)^ := PBoolean(Data)^;
   ftInteger:
     PInteger(Dest)^ := PInteger(Data)^;
-  ftLargeint, ftFloat, ftCurrency:
+  ftLargeint, ftFloat, ftCurrency,ftBCD:
     PInt64(Dest)^ := PInt64(Data)^;
   ftDate, ftTime, ftDateTime:
     if PDateTime(Data)^=0 then // handle 30/12/1899 date as NULL
