@@ -2786,8 +2786,14 @@ var
 /// get the signed 32-bit integer value stored in P^
 // - we use the PtrInt result type, even if expected to be 32-bit, to use
 // native CPU register size (don't want any 32-bit overflow here)
-// - it will stop the parsing when P^ does not contain numbers any more
+// - will end parsing when P^ does not contain any number (e.g. it reaches any
+// ending #0 char)
 function GetInteger(P: PUTF8Char): PtrInt; overload;
+
+/// get the signed 32-bit integer value stored in P^..PEnd^
+// - will end parsing when P^ does not contain any number (e.g. it reaches any
+// ending #0 char), or when P reached PEnd (avoiding any buffer overflow)
+function GetInteger(P,PEnd: PUTF8Char): PtrInt; overload;
 
 /// get the signed 32-bit integer value stored in P^
 // - if P if nil or not start with a valid numerical value, returns Default
@@ -5376,6 +5382,7 @@ type
     function HashFindAndCompare(aHashCode: cardinal; const Elem): integer;
     function GetHashFromIndex(aIndex: Integer): Cardinal;
     procedure HashInvalidate;
+    procedure RaiseFatalCollision(const caller: RawUTF8; aHashCode: cardinal);
   public
     /// initialize the wrapper with a one-dimension dynamic array
     // - this version accepts some hash-dedicated parameters: aHashElement to
@@ -11456,6 +11463,16 @@ function crc64c(buf: PAnsiChar; len: cardinal): Int64;
 function crc63c(buf: PAnsiChar; len: cardinal): Int64;
 
 type
+  /// binary access to an unsigned 64-bit value
+  TQWordRec = record
+    case integer of
+    0: (V: Qword);
+    1: (L,H: cardinal);
+    2: (B: array[0..3] of byte);
+  end;
+  /// points to the binary of an unsigned 64-bit value
+  PQWordRec = ^TQWordRec;
+
   /// store a 128-bit hash value
   // - e.g. a MD5 digest, or array[0..3] of cardinal (TBlock128)
   // - consumes 16 bytes of memory
@@ -11499,10 +11516,11 @@ type
   THash128Rec = packed record
   case integer of
   0: (Lo,Hi: Int64);
-  1: (i0,i1,i2,i3: integer);
-  2: (c0,c1,c2,c3: cardinal);
-  3: (c: TBlock128);
-  4: (b: THash128);
+  1: (L,H: QWord);
+  2: (i0,i1,i2,i3: integer);
+  3: (c0,c1,c2,c3: cardinal);
+  4: (c: TBlock128);
+  5: (b: THash128);
   end;
   /// pointer to 128-bit hash map variable record
   PHash128Rec = ^THash128Rec;
@@ -27650,15 +27668,17 @@ begin
   BinToHexDisplay(@aInt64,@result[1],sizeof(aInt64));
 end;
 
-type TWordRec = packed record YDiv100, YMod100: byte; end;
-
 {$ifdef FPC_OR_PUREPASCAL} // Alf reported asm below fails with FPC/Linux32
-function Div100(Y: word): TWordRec; {$ifdef HASINLINE}inline;{$endif}
+type TWordRec = packed record YDiv100, YMod100: cardinal; end;
+
+function Div100(Y: cardinal): TWordRec; {$ifdef HASINLINE}inline;{$endif}
 begin
-  result.YDiv100 := Y div 100;
-  result.YMod100 := Y-(result.YDiv100*100); // * is always faster than div
+  result.YDiv100 := Y div 100; // FPC will use fast reciprocal
+  result.YMod100 := Y-(result.YDiv100*100); // avoid div twice
 end;
 {$else}
+type TWordRec = packed record YDiv100, YMod100: byte; end;
+
 function Div100(Y: word): TWordRec;
 asm
         mov     cl, 100
@@ -29927,9 +29947,45 @@ begin
         result := result*10+PtrInt(c);
       inc(P);
     until false;
+    if minus then
+      result := -result;
   end;
-  if minus then
-    result := -result;
+end;
+
+function GetInteger(P,PEnd: PUTF8Char): PtrInt;
+var c: PtrUInt;
+    minus: boolean;
+begin
+  result := 0;
+  if (P=nil) or (P>=PEnd) then
+    exit;
+  while P^ in [#1..' '] do begin
+    inc(P);
+    if P=PEnd then
+      exit;
+  end;
+  if P^='-' then begin
+    minus := true;
+    repeat inc(P); if P=PEnd then exit; until P^<>' ';
+  end else begin
+    minus := false;
+    if P^='+' then
+      repeat inc(P); if P=PEnd then exit; until P^<>' ';
+  end;
+  c := byte(P^)-48;
+  if c<=9 then begin
+    result := c;
+    inc(P);
+    repeat
+      c := byte(P^)-48;
+      if c>9 then
+        break else
+        result := result*10+PtrInt(c);
+      inc(P);
+    until P=PEnd;
+    if minus then
+      result := -result;
+  end;
 end;
 
 function GetInteger(P: PUTF8Char; var err: integer): PtrInt;
@@ -30225,7 +30281,11 @@ begin
           inc(err);
           if c>9 then
             exit else
-            result := result shl 3+result+result; // fast result := result*10
+            {$ifdef CPU32DELPHI}
+            result := result shl 3+result+result;
+            {$else}
+            result := result*10;
+            {$endif}
           inc(result,c);
           if result<0 then
             exit; // overflow (>$7FFFFFFFFFFFFFFF)
@@ -35149,7 +35209,7 @@ end;
 
 function Random32(max: cardinal): cardinal; 
 begin
-  result := (Int64(Random32)*max)shr 32;
+  result := (QWord(Random32)*max)shr 32;
 end;
 
 procedure FillRandom(Dest: PCardinalArray; CardinalCount: integer);
@@ -35359,10 +35419,10 @@ begin
       c := byte(P^)-48;
       if c>9 then
         break;
-      {$ifdef CPU64}
-      result := result*10;
-      {$else}
+      {$ifdef CPU32DELPHI}
       result := result shl 3+result+result;
+      {$else}
+      result := result*10;
       {$endif}
       inc(result,c);
       inc(P);
@@ -35386,14 +35446,14 @@ begin
   if Dec<>5 then // Dec=5 most of the time
   case Dec of
   0,1: result := result*10000;
-  {$ifdef CPU64}
-  2: result := result*1000;
-  3: result := result*100;
-  4: result := result*10;
-  {$else}
+  {$ifdef CPU32DELPHI}
   2: result := result shl 10-result shl 4-result shl 3;
   3: result := result shl 6+result shl 5+result shl 2;
   4: result := result shl 3+result+result;
+  {$else}
+  2: result := result*1000;
+  3: result := result*100;
+  4: result := result*10;
   {$endif}
   end;
   if minus then
@@ -47305,7 +47365,7 @@ begin
         last := first;
       end;
   until false;
-  raise ESynException.Create('HashFind fatal collision'); // should never be here
+  RaiseFatalCollision('HashFind',aHashCode);
 end;
 
 function TDynArrayHashed.HashFindAndCompare(aHashCode: cardinal; const Elem): integer;
@@ -47360,7 +47420,17 @@ begin
         last := first;
       end;
   until false;
-  raise ESynException.Create('HashFindAndCompare fatal collision');
+  RaiseFatalCollision('HashFindAndCompare',aHashCode);
+end;
+
+procedure TDynArrayHashed.RaiseFatalCollision(const caller: RawUTF8;
+  aHashCode: cardinal);
+begin
+  {$ifdef UNDIRECTDYNARRAY}with InternalDynArray do{$endif}
+  raise ESynException.CreateUTF8('TDynArrayHashed.% fatal collision: '+
+    'aHashCode=% fHashsCount=% Count=% Capacity=% ArrayType=% fKnownType=%',
+    [caller,CardinalToHexShort(aHashCode),fHashsCount,GetCount,GetCapacity,
+    PShortString(@PTypeInfo(ArrayType).NameLen)^,ToText(fKnownType)^]);
 end;
 
 function TDynArrayHashed.GetHashFromIndex(aIndex: Integer): Cardinal;
