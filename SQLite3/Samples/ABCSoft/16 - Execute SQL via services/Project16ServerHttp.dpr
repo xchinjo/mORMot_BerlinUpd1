@@ -77,8 +77,8 @@ begin
 
   FDPhysFBDriverLink := TFDPhysFBDriverLink.Create(Nil);
   FDPhysFBDriverLink.VendorLib:='fbclient.dll';
-  //aProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server='+_SERVERIP,_DBNAME,_DBUSRNAME,_DBPASSWD);
-  fProps := TSQLDBFireDACConnectionProperties.Create('IB?Server=rootcode.info;Port=3050','/fbdb/sam.fdb','SYSDBA','masterkey');
+  fProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server=192.168.1.111','delsnet','root','delsnet');
+  //fProps := TSQLDBFireDACConnectionProperties.Create('IB?Server=rootcode.info;Port=3050','/fbdb/sam.fdb','SYSDBA','masterkey');
 
   //fProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server=192.168.1.9','Shadow','insysc','insysc1234567890*');
   //GFFireDACConn := TSQLDBFireDACConnection.Create(fProps);
@@ -91,10 +91,21 @@ var res: ISQLDBRows;
 begin
   if fProps=nil then
     raise Exception.Create('Connect call required before Execute');
-  res := fProps.ExecuteInlined(aSQL,aExpectResults);
-  if res=nil then
-    result := '' else
-    result := res.FetchAllAsJSON(aExpanded);
+
+  if isSelect(Pointer(aSQL)) then
+  begin
+    res := fProps.ExecuteInlined(aSQL,aExpectResults);
+    if res=nil then
+      result := ''
+    else
+      result := res.FetchAllAsJSON(aExpanded);
+  end else
+  begin
+    fProps.ExecuteNoResult(aSQL,[]) ;
+    result :='';
+  end;
+
+
 end;
 
 function TServiceRemoteSQL.GetTableNames: TRawUTF8DynArray;

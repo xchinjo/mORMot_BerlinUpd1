@@ -6,7 +6,8 @@ uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls,
   SynCommons,mORMotMidasVCL, mORMot, mORMotHttpClient, mORMotUI, mORMotUILogin,
-  Project16Interface, ExtCtrls, Grids, Data.DB, Datasnap.DBClient;
+  Project16Interface, ExtCtrls, Grids, Data.DB, Datasnap.DBClient,
+  Vcl.DBGrids;
 
 type
   TProjectSettings = class(TPersistent)
@@ -42,6 +43,8 @@ type
     lblSelectTable: TLabel;
     lbedRemoteSErver: TLabeledEdit;
     ClientDataSet1: TClientDataSet;
+    DataSource1: TDataSource;
+    DBGrid1: TDBGrid;
     procedure FormDestroy(Sender: TObject);
     procedure FormShow(Sender: TObject);
     procedure btnOpenClick(Sender: TObject);
@@ -57,6 +60,7 @@ type
   public
     function Execute(FormatSQLWhere: PUTF8Char; const BoundsSQLWhere: array of const): TSQLTableJSON; overload;
     procedure ExecuteSQL(FormatSQLWhere: PUTF8Char; const BoundsSQLWhere: array of const);
+    function getDataset(strSQL:RawUTF8):TClientDataSet;
   end;
 
 var
@@ -116,6 +120,7 @@ begin
   end;
 end;
 
+
 procedure TMainForm.btnOpenClick(Sender: TObject);
 var TableNames: TRawUTF8DynArray;
 begin
@@ -149,6 +154,12 @@ begin
   mmoQuery.Text := 'select * from '+cbbTableNames.Text;
 end;
 
+
+function TMainForm.getDataset(strSQL:RawUTF8): TClientDataSet;
+begin
+  result := JSONToClientDataSet(self,fService.Execute(strSQL,True,False));
+end;
+
 procedure TMainForm.btnExecuteClick(Sender: TObject);
 var SQL: RawUTF8;
     cds:TClientDataSet;
@@ -165,11 +176,24 @@ begin
           TSQLTableJSON.Create(SQL,pointer(fTableJSON),Length(fTableJSON)),fClient);
       end; //else
 
+      // ##1
+       DataSource1.DataSet
+       :=JSONToClientDataSet(self,fService.Execute(SQL,True,False));// fService.Execute(SQL,False,False);
+
+      //## 2
+       ClientDataSet1:=getDataset(SQL);
+       DataSource1.DataSet:=ClientDataSet1;
 
 
-      // cds:=JSONToClientDataSet(self,fService.Execute(SQL,True,False));// fService.Execute(SQL,False,False);
+
+
+      //JSONToClientDataSet(cds,fService.Execute(SQL,True,False));// fService.Execute(SQL,False,False);
+      //DataSource1.DataSet:=cds;
+
 
       // ShowMessage(inttostr(cds.RecordCount));
+
+
 
 
 

@@ -9,9 +9,6 @@
         <Projects Include="Project16ServerHttp.dproj">
             <Dependencies/>
         </Projects>
-        <Projects Include="Project16fmxClient.dproj">
-            <Dependencies/>
-        </Projects>
     </ItemGroup>
     <ProjectExtensions>
         <Borland.Personality>Default.Personality.12</Borland.Personality>
@@ -38,23 +35,14 @@
     <Target Name="Project16ServerHttp:Make">
         <MSBuild Projects="Project16ServerHttp.dproj" Targets="Make"/>
     </Target>
-    <Target Name="Project16fmxClient">
-        <MSBuild Projects="Project16fmxClient.dproj"/>
-    </Target>
-    <Target Name="Project16fmxClient:Clean">
-        <MSBuild Projects="Project16fmxClient.dproj" Targets="Clean"/>
-    </Target>
-    <Target Name="Project16fmxClient:Make">
-        <MSBuild Projects="Project16fmxClient.dproj" Targets="Make"/>
-    </Target>
     <Target Name="Build">
-        <CallTarget Targets="Project16Client;Project16ServerHttp;Project16fmxClient"/>
+        <CallTarget Targets="Project16Client;Project16ServerHttp"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="Project16Client:Clean;Project16ServerHttp:Clean;Project16fmxClient:Clean"/>
+        <CallTarget Targets="Project16Client:Clean;Project16ServerHttp:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="Project16Client:Make;Project16ServerHttp:Make;Project16fmxClient:Make"/>
+        <CallTarget Targets="Project16Client:Make;Project16ServerHttp:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

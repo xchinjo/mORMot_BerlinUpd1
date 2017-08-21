@@ -119,6 +119,7 @@ object MainForm: TMainForm
       LabelPosition = lpLeft
       TabOrder = 6
       Text = 'localhost'
+      Visible = False
     end
   end
   object drwgrdData: TDrawGrid
@@ -177,9 +178,27 @@ object MainForm: TMainForm
       OnChange = cbbTableNamesChange
     end
   end
+  object DBGrid1: TDBGrid
+    Left = 65
+    Top = 368
+    Width = 320
+    Height = 120
+    DataSource = DataSource1
+    TabOrder = 4
+    TitleFont.Charset = DEFAULT_CHARSET
+    TitleFont.Color = clWindowText
+    TitleFont.Height = -13
+    TitleFont.Name = 'Tahoma'
+    TitleFont.Style = []
+  end
   object ClientDataSet1: TClientDataSet
     Aggregates = <>
     Params = <>
+    Left = 200
+    Top = 280
+  end
+  object DataSource1: TDataSource
+    DataSet = ClientDataSet1
     Left = 392
     Top = 288
   end

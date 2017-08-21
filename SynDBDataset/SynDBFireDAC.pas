@@ -421,6 +421,8 @@ begin
   inherited Create(aProperties);
   fDatabase := TADConnection.Create(nil);
   fDatabase.ResourceOptions.SilentMode := True; // no need for wait cursor
+  fDatabase.ResourceOptions.AutoReconnect := True;
+
   fDatabase.Params.Text :=
     (fProperties as TSQLDBFireDACConnectionProperties).fFireDACOptions.Text;
 end;
