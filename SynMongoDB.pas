@@ -89,22 +89,22 @@ uses
 { ************ BSON (Binary JSON) process }
 
 type
-  /// binary representation of a 128 bit decimal, stored as 16 bytes
+  /// binary representation of a 128-bit decimal, stored as 16 bytes
   // - i.e. IEEE 754-2008 128-bit decimal floating point as used in the
-  // BSON Decimal128 format
+  // BSON Decimal128 format, and processed by the TDecimal128 object
   TDecimal128Bits = record
     case integer of
     0: (lo, hi: QWord);
     1: (b: array[0..15] of byte);
     2: (c: array[0..3] of cardinal);
   end;
-  /// points to a 128 bit decimal binary
+  /// points to a 128-bit decimal binary
   PDecimal128Bits = ^TDecimal128Bits;
 
-  /// maximum length of a decimal128 string
+  /// enough characters to contain any TDecimal128 text representation
   TDecimal128Str = array[0..42] of AnsiChar;
 
-  /// some special 128 bit decimal values
+  /// some special 128-bit decimal values
   // - see TDecimal128.SetSpecial to set the corresponding value
   // - dsvError is returned by TDecimal128.FromText() on parsing error
   // - dsvValue indicates that this is not a known "special" value, but some
@@ -112,9 +112,9 @@ type
   TDecimal128SpecialValue = (
     dsvError, dsvValue, dsvNan, dsvZero, dsvPosInf, dsvNegInf, dsvMin, dsvMax);
 
-  /// handles a 128 bit decimal value
+  /// handles a 128-bit decimal value
   // - i.e. IEEE 754-2008 128-bit decimal floating point as used in the
-  // BSON Decimal128 format
+  // BSON Decimal128 format, i.e. betDecimal128 TBSONElementType
   // - the betFloat BSON format stores a 64-bit floating point value, which
   // doesn't have exact decimals, so may suffer from rounding or approximation
   // - for instance, if you work with Delphi currency values, you may store
@@ -148,10 +148,15 @@ type
     /// fills with a 32-bit unsigned value
     procedure FromUInt32(value: cardinal);
       {$ifdef HASINLINE}inline;{$endif}
+    /// fills with a 64-bit signed value
+    procedure FromInt64(value: Int64);
+    /// fills with a 64-bit unsigned value
+    procedure FromQWord(value: QWord);
+      {$ifdef HASINLINE}inline;{$endif}
     /// fills with a fixed decimal value, as stored in currency
     // - will store the content with explictly four decimals, as in currency
     // - by design, this method is very fast and accurate
-    procedure FromCurr(value: Currency);
+    procedure FromCurr(const value: Currency);
     /// fills from the text representation of a decimal value
     // - returns dsvValue or one of the dsvNan, dsvZero, dsvPosInf, dsvNegInf
     // special value indicator otherwise on succes
@@ -165,6 +170,7 @@ type
     /// convert a variant into one Decimal128 value
     // - will first check for a TBSONVariant containing a betDecimal128 (e.g.
     // as retrieved via the ToVariant method)
+    // - will recognize currency and VariantToInt64() stored values
     // - then will try to convert the variant from its string value, expecting
     // a floating-point text content
     // - returns TRUE if conversion was made, FALSE on any error
@@ -176,16 +182,16 @@ type
     // so you should provide the expected precision, from the actual storage
     // variable (you may specify e.g. SINGLE_PRECISION or EXTENDED_PRECISION if
     // you don't use a double kind of value)
-    function FromFloat(value: TSynExtended; precision: integer=0): boolean;
+    function FromFloat(const value: TSynExtended; precision: integer=0): boolean;
     /// fast bit-per-bit value comparison
     function Equals(const other: TDecimal128): boolean;
       {$ifdef HASINLINE}inline;{$endif}
     /// converts the value to its string representation
     // - returns the number of AnsiChar written to Buffer
     function ToText(out Buffer: TDecimal128Str): integer; overload;
-    /// converts the value to its string representation
+    /// converts this Decimal128 value to its string representation
     function ToText: RawUTF8; overload;
-    /// converts the value to its string representation
+    /// converts this Decimal128 value to its string representation
     procedure ToText(var result: RawUTF8); overload;
     /// convert this Decimal128 value to its TBSONVariant custom variant value
     function ToVariant: variant; overload;
@@ -200,11 +206,17 @@ type
     // - by design, some information may be lost during conversion, unless the
     // value has been stored previously via the FromCurr() method - in this
     // case, conversion is immediate and accurate
-    function ToCurr: currency;
-    /// converts the value to its string representation
+    function ToCurr: currency; overload;
+      {$ifdef HASINLINE}inline;{$endif}
+    /// converts this Decimal128 value to a fixed decimal value
+    // - by design, some information may be lost during conversion, unless the
+    // value has been stored previously via the FromCurr() method - in this
+    // case, conversion is immediate and accurate
+    procedure ToCurr(out result: currency); overload;
+    /// converts this Decimal128 value to its string representation
     procedure AddText(W: TTextWriter);
   end;
-  /// points to a 128 bit decimal value
+  /// points to a 128-bit decimal value
   PDecimal128 = ^TDecimal128;
 
 const
@@ -214,6 +226,20 @@ const
     '', '', 'NaN', '0', 'Infinity', '-Infinity',
     '-9.999999999999999999999999999999999E+6144',
      '9.999999999999999999999999999999999E+6144');
+
+  BSON_DECIMAL128_HI_NAN        = $7c00000000000000;
+  BSON_DECIMAL128_HI_INT64POS   = $3040000000000000; // 0 fixed decimals
+  BSON_DECIMAL128_HI_INT64NEG   = $b040000000000000;
+  BSON_DECIMAL128_HI_CURRPOS    = $3038000000000000; // 4 fixed decimals
+  BSON_DECIMAL128_HI_CURRNEG    = $b038000000000000;
+  BSON_DECIMAL128_EXPONENT_MAX  = 6111;
+  BSON_DECIMAL128_EXPONENT_MIN  = -6176;
+  BSON_DECIMAL128_EXPONENT_BIAS = 6176;
+  BSON_DECIMAL128_MAX_DIGITS    = 34;
+
+/// ready-to-be displayed text of a TDecimal128SpecialValue
+function ToText(spec: TDecimal128SpecialValue): PShortString; overload;
+
 
 type
   /// exception type used for BSON process
@@ -254,7 +280,8 @@ type
   // - in MongoDB, documents stored in a collection require a unique _id field
   // that acts as a primary key: by default, it uses such a 12-byte ObjectID
   // - by design, sorting by _id: ObjectID is roughly equivalent to sorting by
-  // creation time, so ease sharding and BTREE storage 
+  // creation time, so ease sharding and BTREE storage
+  // - match betObjectID TBSONElementType
   {$A-}
   {$ifndef UNICODE}
   TBSONObjectID = object
@@ -1283,7 +1310,6 @@ type
   // command message for MongoDB >= 2.6 instead of older dedicated Wire messages
   TMongoRequestWritable = class(TMongoRequest)
   protected
-
   public
   end;
 
@@ -1882,7 +1908,11 @@ type
     fReadPreference: TMongoClientReplicaSetReadPreference;
     fWriteConcern: TMongoClientWriteConcern;
     fConnectionTimeOut: Cardinal;
-    fGracefulReconnect: boolean;
+    fGracefulReconnect: record
+      Enabled, ForcedDBCR: boolean;
+      User, Database: RawUTF8;
+      EncryptedDigest: RawByteString;
+    end;
     fLog: TSynLog;
     fLogRequestEvent: TSynLogInfo;
     fLogReplyEvent: TSynLogInfo;
@@ -1895,6 +1925,8 @@ type
     function GetBytesReceived: Int64;
     function GetBytesSent: Int64;
     function GetBytesTransmitted: Int64;
+    procedure Auth(const DatabaseName,UserName,Digest: RawUTF8; ForceMongoDBCR: boolean);
+    function ReOpen: boolean;
   public
     /// prepare a connection to a MongoDB server or Replica Set
     // - this constructor won't create the connection until the Open method
@@ -1979,7 +2011,8 @@ type
     property ConnectionTimeOut: Cardinal read fConnectionTimeOut write fConnectionTimeOut;
     /// allow automatic reconnection (with authentication, if applying), if the
     // socket is closed (e.g. was dropped from the server)
-    property GracefulReconnect: boolean read fGracefulReconnect write fGracefulReconnect;
+    property GracefulReconnect: boolean
+      read fGracefulReconnect.Enabled write fGracefulReconnect.Enabled;
     /// how may bytes this client did received, among all its connections
     property BytesReceived: Int64 read GetBytesReceived;
     /// how may bytes this client did received, among all its connections
@@ -2005,7 +2038,7 @@ type
       read fLogReplyEventMaxSize write fLogReplyEventMaxSize;
   end;
 
-  /// remote access to a MondoDB database
+  /// remote access to a MongoDB database
   TMongoDatabase = class
   protected
     fClient: TMongoClient;
@@ -2084,7 +2117,7 @@ type
     property Client: TMongoClient read fClient;
   end;
 
-  /// remote access to a MondoDB collection
+  /// remote access to a MongoDB collection
   TMongoCollection = class
   protected
     fDatabase: TMongoDatabase;
@@ -2575,6 +2608,15 @@ type
 
 {$M-}
 
+
+/// ready-to-be displayed text of a TMongoOperation item
+function ToText(op: TMongoOperation): PShortString; overload;
+
+/// ready-to-be displayed text of a TMongoClientWriteConcern item
+function ToText(wc: TMongoClientWriteConcern): PShortString; overload;
+
+/// ready-to-be displayed text of a TMongoClientReplicaSetReadPreference item
+function ToText(pref: TMongoClientReplicaSetReadPreference): PShortString; overload;
 
 
 implementation
@@ -4280,6 +4322,27 @@ begin
   result := GetEnumName(TypeInfo(TBSONElementType),ord(kind));
 end;
 
+function ToText(spec: TDecimal128SpecialValue): PShortString;
+begin
+  result := GetEnumName(TypeInfo(TDecimal128SpecialValue),ord(spec));
+end;
+
+function ToText(op: TMongoOperation): PShortString;
+begin
+  result := GetEnumName(TypeInfo(TMongoOperation),ord(op));
+end;
+
+function ToText(wc: TMongoClientWriteConcern): PShortString;
+begin
+  result := GetEnumName(TypeInfo(TMongoClientWriteConcern),ord(wc));
+end;
+
+function ToText(pref: TMongoClientReplicaSetReadPreference): PShortString;
+begin
+  result := GetEnumName(TypeInfo(TMongoClientReplicaSetReadPreference),ord(pref));
+end;
+
+
 function ObjectID: variant;
 var ID: TBSONObjectID;
 begin
@@ -4624,8 +4687,7 @@ constructor TMongoRequest.Create(const FullCollectionName: RawUTF8;
   opCode: TMongoOperation; requestID, responseTo: Integer);
 begin
   if not (opCode in CLIENT_OPCODES) then
-    raise EMongoException.CreateUTF8('Unexpected %.Create(opCode=%)',
-      [self,GetEnumName(TypeInfo(TMongoOperation),ord(opCode))^]);
+    raise EMongoException.CreateUTF8('Unexpected %.Create(opCode=%)',[self,ToText(opCode)^]);
   inherited Create(TRawByteStringStream);
   fFullCollectionName := FullCollectionName;
   Split(fFullCollectionName,'.',fDatabaseName,fCollectionName);
@@ -5273,10 +5335,10 @@ end;
 function TMongoConnection.Send(Request: TMongoRequest): boolean;
 var doc: TBSONDocument;
 begin
-  if fSocket=nil then
-    raise EMongoRequestException.Create('Missing Open',self,Request);
+  if not Opened and not Client.ReOpen then
+    raise EMongoRequestException.Create('Send: Missing Open',self,Request);
   if Request=nil then
-    raise EMongoRequestException.Create('LockAndSend(nil)',self);
+    raise EMongoRequestException.Create('Send(nil)',self);
   Request.ToBSONDocument(doc);
   if (Client.LogRequestEvent<>sllNone) and (Client.Log<>nil) and
      (Client.LogRequestEvent in Client.Log.Family.Level) then
@@ -5364,8 +5426,12 @@ begin
               '%.GetReply: ResponseTo=% Expected:% in current blocking mode',
               [self,Header.ResponseTo,Request.MongoRequestID],self,Request);
       end else
-        raise EMongoRequestException.Create('Server reset the connection: '+
-          'probably due to a bad formatted BSON request',self,Request);
+        try
+          Close;
+        finally
+          raise EMongoRequestException.Create('Server did reset the connection: '+
+            'probably due to a bad formatted BSON request -> close socket',self,Request);
+        end;
     // if we reached here, this is due to a socket error
     raise EMongoRequestOSException.Create('GetReply',self,Request);
   finally
@@ -5539,6 +5605,7 @@ var secHost: TRawUTF8DynArray;
 begin
   fConnectionTimeOut := 30000;
   fLogReplyEventMaxSize := 1024;
+  fGracefulReconnect.Enabled := true;
   FormatUTF8('mongodb://%:%',[Host,Port],fConnectionString);
   CSVToRawUTF8DynArray(pointer(SecondaryHostCSV),secHost);
   nHost := length(secHost);
@@ -5659,8 +5726,41 @@ end;
 
 function TMongoClient.OpenAuth(const DatabaseName,UserName,PassWord: RawUTF8;
   ForceMongoDBCR: boolean): TMongoDatabase;
+var digest: RawByteString;
+begin
+  if (self=nil) or (DatabaseName='') or (UserName='') or (PassWord='') then
+    raise EMongoException.CreateUTF8('Invalid %.OpenAuth("%") call',[self,DatabaseName]);
+  result := TMongoDatabase(fDatabases.GetObjectByName(DatabaseName));
+  if result=nil then  // not already opened -> try now from primary host
+  try // note: authentication works on a single database per socket connection
+    if not fConnections[0].Opened then
+    try
+      fConnections[0].Open; // socket connection
+      AfterOpen; // need ServerBuildInfoNumber just below
+      digest := PasswordDigest(UserName,Password);
+      Auth(DatabaseName,UserName,digest,ForceMongoDBCR);
+      with fGracefulReconnect do
+        if Enabled and (EncryptedDigest='') then begin
+          ForcedDBCR := ForceMongoDBCR;
+          User := UserName;
+          Database := DatabaseName;
+          EncryptedDigest := CryptDataForCurrentUser(digest,Database,true);
+        end;
+    except
+      fConnections[0].Close;
+      raise;
+    end;
+    result := TMongoDatabase.Create(Self,DatabaseName);
+    fDatabases.AddObject(DatabaseName,result);
+  finally
+    FillZero(digest);
+  end;
+end;
+
+procedure TMongoClient.Auth(const DatabaseName,UserName,Digest: RawUTF8;
+  ForceMongoDBCR: boolean);
 var res,bson: variant;
-    err,digest,nonce,first,key,user,msg,rnonce: RawUTF8;
+    err,nonce,first,key,user,msg,rnonce: RawUTF8;
     payload: RawByteString;
     rnd: TAESBlock;
     sha: TSHA1;
@@ -5677,92 +5777,75 @@ var res,bson: variant;
       resp.InitCSV(pointer(payload),JSON_OPTIONS_FAST,'=',',') else
       err := 'missing or invalid returned payload';
   end;
-  
-begin
-  if (self=nil) or (UserName='') or (PassWord='') then
-    raise EMongoException.CreateUTF8('Invalid %.OpenAuth("%") call',[self,DatabaseName]);
-  result := TMongoDatabase(fDatabases.GetObjectByName(DatabaseName));
-  if result=nil then  // not already opened -> try now from primary host
-  try
-    if not fConnections[0].Opened then
-    try
-      digest := PasswordDigest(UserName,Password);
-      fConnections[0].Open; // socket connection
-      AfterOpen; // need ServerBuildInfoNumber just below
-      if ForceMongoDBCR or (ServerBuildInfoNumber<3000000) then begin
-        // MONGODB-CR
-        // http://docs.mongodb.org/meta-driver/latest/legacy/implement-authentication-in-driver
-        bson := BSONVariant(['getnonce',1]);
-        err := fConnections[0].RunCommand(DatabaseName,bson,res);
-        if (err='') and not _Safe(res)^.GetAsRawUTF8('nonce',nonce) then
-          err := 'missing returned nonce';
-        if err<>'' then
-          raise EMongoException.CreateUTF8('%.OpenAuthCR("%") step1: % - res=%',
-            [self,DatabaseName,err,res]);
-        key := MD5(nonce+UserName+digest);
-        bson := BSONVariant(['authenticate',1,'user',UserName,'nonce',nonce,'key',key]);
-        err := fConnections[0].RunCommand(DatabaseName,bson,res);
-        if err<>'' then
-          raise EMongoException.CreateUTF8('%.OpenAuthCR("%") step2: % - res=%',
-            [self,DatabaseName,err,res]);
-      end else begin
-        // SCRAM-SHA-1
-        // https://tools.ietf.org/html/rfc5802#section-5
-        user := StringReplaceAll(StringReplaceAll(UserName,'=','=3D'),',','=2C');
-        TAESPRNG.Main.FillRandom(rnd);
-        nonce := BinToBase64(@rnd,sizeof(rnd));
-        FormatUTF8('n=%,r=%',[user,nonce],first);
-        BSONVariantType.FromBinary('n,,'+first,bbtGeneric,bson);
-        err := fConnections[0].RunCommand(DatabaseName,BSONVariant([
-          'saslStart',1,'mechanism','SCRAM-SHA-1','payload',bson,'autoAuthorize',1]),res);
-        CheckPayload;
-        if err='' then begin
-          rnonce := resp.U['r'];
-          if copy(rnonce,1,length(nonce))<>nonce then
-            err := 'returned invalid nonce';
-        end;
-        if err<>'' then
-          raise EMongoException.CreateUTF8('%.OpenAuthSCRAM("%") step1: % - res=%',
-            [self,DatabaseName,err,res]);
-        key := 'c=biws,r='+rnonce;
-        PBKDF2_HMAC_SHA1(digest,Base64ToBin(resp.U['s']),UTF8ToInteger(resp.U['i']),salted);
-        HMAC_SHA1(salted,'Client Key',client);
-        sha.Full(@client,SizeOf(client),stored);
-        msg := first+','+RawUTF8(payload)+','+key;
-        HMAC_SHA1(stored,msg,stored);
-        XorMemory(@client,@stored,SizeOf(client));
-        HMAC_SHA1(salted,'Server Key',server);
-        HMAC_SHA1(server,msg,server);
-        msg := key+',p='+BinToBase64(@client,SizeOf(client));
-        BSONVariantType.FromBinary(msg,bbtGeneric,bson);
-        err := fConnections[0].RunCommand(DatabaseName,BSONVariant([
-          'saslContinue',1,'conversationId',res.conversationId,'payload',bson]),res);
-        resp.Clear;
-        CheckPayload;
-        if (err='') and (resp.U['v']<>BinToBase64(@server,SizeOf(server))) then
-            err := 'Server returned an invalid signature';
-        if err<>'' then
-          raise EMongoException.CreateUTF8('%.OpenAuthSCRAM("%") step2: % - res=%',
-            [self,DatabaseName,err,res]);
-        if not res.done then begin
-          // third empty challenge may be required
-          err := fConnections[0].RunCommand(DatabaseName,BSONVariant([
-            'saslContinue',1,'conversationId',res.conversationId,'payload','']),res);
-         if (err='') and not res.done then
-           err := 'SASL conversation failed to complete';
-          if err<>'' then
-            raise EMongoException.CreateUTF8('%.OpenAuthSCRAM("%") step3: % - res=%',
-              [self,DatabaseName,err,res]);
-        end;
-      end;
-    except
-      fConnections[0].Close;
-      raise;
+
+begin // caller should have made fConnections[0].Open
+  if (self=nil) or (DatabaseName='') or (UserName='') or (Digest='') then
+    raise EMongoException.CreateUTF8('Invalid %.Auth("%") call',[self,DatabaseName]);
+  if ForceMongoDBCR or (ServerBuildInfoNumber<3000000) then begin
+    // MONGODB-CR
+    // http://docs.mongodb.org/meta-driver/latest/legacy/implement-authentication-in-driver
+    bson := BSONVariant(['getnonce',1]);
+    err := fConnections[0].RunCommand(DatabaseName,bson,res);
+    if (err='') and not _Safe(res)^.GetAsRawUTF8('nonce',nonce) then
+      err := 'missing returned nonce';
+    if err<>'' then
+      raise EMongoException.CreateUTF8('%.OpenAuthCR("%") step1: % - res=%',
+        [self,DatabaseName,err,res]);
+    key := MD5(nonce+UserName+Digest);
+    bson := BSONVariant(['authenticate',1,'user',UserName,'nonce',nonce,'key',key]);
+    err := fConnections[0].RunCommand(DatabaseName,bson,res);
+    if err<>'' then
+      raise EMongoException.CreateUTF8('%.OpenAuthCR("%") step2: % - res=%',
+        [self,DatabaseName,err,res]);
+  end else begin
+    // SCRAM-SHA-1
+    // https://tools.ietf.org/html/rfc5802#section-5
+    user := StringReplaceAll(StringReplaceAll(UserName,'=','=3D'),',','=2C');
+    TAESPRNG.Main.FillRandom(rnd);
+    nonce := BinToBase64(@rnd,sizeof(rnd));
+    FormatUTF8('n=%,r=%',[user,nonce],first);
+    BSONVariantType.FromBinary('n,,'+first,bbtGeneric,bson);
+    err := fConnections[0].RunCommand(DatabaseName,BSONVariant([
+      'saslStart',1,'mechanism','SCRAM-SHA-1','payload',bson,'autoAuthorize',1]),res);
+    CheckPayload;
+    if err='' then begin
+      rnonce := resp.U['r'];
+      if copy(rnonce,1,length(nonce))<>nonce then
+        err := 'returned invalid nonce';
     end;
-    result := TMongoDatabase.Create(Self,DatabaseName);
-    fDatabases.AddObject(DatabaseName,result);
-  finally
-    FillZero(RawByteString(digest));
+    if err<>'' then
+      raise EMongoException.CreateUTF8('%.OpenAuthSCRAM("%") step1: % - res=%',
+        [self,DatabaseName,err,res]);
+    key := 'c=biws,r='+rnonce;
+    PBKDF2_HMAC_SHA1(Digest,Base64ToBin(resp.U['s']),UTF8ToInteger(resp.U['i']),salted);
+    HMAC_SHA1(salted,'Client Key',client);
+    sha.Full(@client,SizeOf(client),stored);
+    msg := first+','+RawUTF8(payload)+','+key;
+    HMAC_SHA1(stored,msg,stored);
+    XorMemory(@client,@stored,SizeOf(client));
+    HMAC_SHA1(salted,'Server Key',server);
+    HMAC_SHA1(server,msg,server);
+    msg := key+',p='+BinToBase64(@client,SizeOf(client));
+    BSONVariantType.FromBinary(msg,bbtGeneric,bson);
+    err := fConnections[0].RunCommand(DatabaseName,BSONVariant([
+      'saslContinue',1,'conversationId',res.conversationId,'payload',bson]),res);
+    resp.Clear;
+    CheckPayload;
+    if (err='') and (resp.U['v']<>BinToBase64(@server,SizeOf(server))) then
+        err := 'Server returned an invalid signature';
+    if err<>'' then
+      raise EMongoException.CreateUTF8('%.OpenAuthSCRAM("%") step2: % - res=%',
+        [self,DatabaseName,err,res]);
+    if not res.done then begin
+      // third empty challenge may be required
+      err := fConnections[0].RunCommand(DatabaseName,BSONVariant([
+        'saslContinue',1,'conversationId',res.conversationId,'payload','']),res);
+     if (err='') and not res.done then
+       err := 'SASL conversation failed to complete';
+      if err<>'' then
+        raise EMongoException.CreateUTF8('%.OpenAuthSCRAM("%") step3: % - res=%',
+          [self,DatabaseName,err,res]);
+    end;
   end;
 end;
 
@@ -5778,14 +5861,39 @@ begin
   end;
 end;
 
+function TMongoClient.ReOpen: boolean;
+var digest: RawByteString;
+begin
+  result := false;
+  with fGracefulReconnect do
+    if Enabled then
+    try
+      if fLog<>nil then
+        fLog.Enter(self,'ReOpen: graceful reconnect');
+      fConnections[0].Open;
+      if EncryptedDigest<>'' then
+        try
+          digest := CryptDataForCurrentUser(EncryptedDigest,Database,false);
+          Auth(Database,User,digest,ForcedDBCR);
+        finally
+          FillZero(digest);
+        end;
+      result := true;
+    except
+      fConnections[0].Close;
+      raise;
+    end;
+end;
+
 function TMongoClient.GetBytesReceived: Int64;
 var i: integer;
 begin
   result := 0;
   if self<>nil then
     for i := 0 to high(fConnections) do
-      if fConnections[i].Socket<>nil then
-        inc(result,fConnections[i].Socket.BytesIn);
+      with fConnections[i] do
+      if fSocket<>nil then
+        inc(result,fSocket.BytesIn);
 end;
 
 function TMongoClient.GetBytesSent: Int64;
@@ -5794,8 +5902,9 @@ begin
   result := 0;
   if self<>nil then
     for i := 0 to high(fConnections) do
-      if fConnections[i].Socket<>nil then
-        inc(result,fConnections[i].Socket.BytesOut);
+      with fConnections[i] do
+      if fSocket<>nil then
+        inc(result,fSocket.BytesOut);
 end;
 
 function TMongoClient.GetBytesTransmitted: Int64;
@@ -5804,8 +5913,9 @@ begin
   result := 0;
   if self<>nil then
     for i := 0 to high(fConnections) do
-      if fConnections[i].Socket<>nil then
-        inc(result,fConnections[i].Socket.BytesIn+fConnections[i].Socket.BytesOut);
+      with fConnections[i] do
+      if fSocket<>nil then
+        inc(result,fSocket.BytesIn+fSocket.BytesOut);
 end;
 
 
@@ -6325,15 +6435,15 @@ end;
 procedure TDecimal128.SetZero;
 begin
   Bits.lo := 0;
-  Bits.hi := $3040000000000000;
+  Bits.hi := BSON_DECIMAL128_HI_INT64POS;
 end;
 
 const
   D128: array[TDecimal128SpecialValue] of TDecimal128Bits = (
     // dsvError, dsvValue, dsvNan, dsvZero, dsvPosInf, dsvNegInf, dsvMin, dsvMax
-    (hi:$7c00000000000000), (hi:$7c00000000000000), (hi:$7c00000000000000),
-    (hi:$3040000000000000), (hi:$7800000000000000),
-    (hi:$f800000000000000), (lo:$378d8e63ffffffff; hi:$dfffed09bead87c0),
+    (hi:BSON_DECIMAL128_HI_NAN), (hi:BSON_DECIMAL128_HI_NAN), (hi:BSON_DECIMAL128_HI_NAN),
+    (hi:BSON_DECIMAL128_HI_INT64POS), (hi:$7800000000000000),
+    (hi:QWord($f800000000000000)), (lo:$378d8e63ffffffff; hi:QWord($dfffed09bead87c0)),
     (lo:$378d8e63ffffffff; hi:$5fffed09bead87c0) );
 
 procedure TDecimal128.SetSpecial(special: TDecimal128SpecialValue);
@@ -6353,20 +6463,37 @@ procedure TDecimal128.FromInt32(value: integer);
 begin
   if value>=0 then begin
     Bits.lo := value;
-    Bits.hi := $3040000000000000;
+    Bits.hi := BSON_DECIMAL128_HI_INT64POS;
   end else begin
     Bits.lo := -value;
-    Bits.hi := $b040000000000000;
+    Bits.hi := BSON_DECIMAL128_HI_INT64NEG;
   end;
 end;
 
 procedure TDecimal128.FromUInt32(value: cardinal);
 begin
   Bits.lo := value;
-  Bits.hi := $3040000000000000;
+  Bits.hi := BSON_DECIMAL128_HI_INT64POS;
 end;
 
-function TDecimal128.FromFloat(value: TSynExtended; precision: integer): boolean;
+procedure TDecimal128.FromInt64(value: Int64);
+begin
+  if value>=0 then begin
+    Bits.lo := value;
+    Bits.hi := BSON_DECIMAL128_HI_INT64POS;
+  end else begin
+    Bits.lo := -value;
+    Bits.hi := BSON_DECIMAL128_HI_INT64NEG;
+  end;
+end;
+
+procedure TDecimal128.FromQWord(value: QWord);
+begin
+  Bits.lo := value;
+  Bits.hi := BSON_DECIMAL128_HI_INT64POS;
+end;
+
+function TDecimal128.FromFloat(const value: TSynExtended; precision: integer): boolean;
 var tmp: shortstring;
 begin
   if precision<=0 then
@@ -6381,14 +6508,14 @@ begin
   end;
 end;
 
-procedure TDecimal128.FromCurr(value: Currency);
+procedure TDecimal128.FromCurr(const value: Currency);
 begin // force exactly 4 decimals
   if value<0 then begin
     Bits.lo := -PInt64(@value)^;
-    Bits.hi := $b038000000000000;
+    Bits.hi := BSON_DECIMAL128_HI_CURRNEG;
   end else begin
     Bits.lo := PInt64(@value)^;
-    Bits.hi := $3038000000000000;
+    Bits.hi := BSON_DECIMAL128_HI_CURRPOS;
   end;
 end;
 
@@ -6398,7 +6525,7 @@ begin
 end;
 
 function div128bits9digits(var value: THash128Rec): cardinal;
-var r64,fastmod: QWord;
+var r64: QWord;
     i: integer;
 begin
   r64 := 0;
@@ -6407,9 +6534,8 @@ begin
     inc(r64,value.c[i]); // add the divided to _rem
     if r64=0 then
       continue;
-    fastmod := r64; // to avoid two 64bit divisions
     value.c[i] := r64 div 1000000000;
-    r64 := fastmod-QWord(value.c[i])*1000000000;
+    dec(r64,QWord(value.c[i])*1000000000);
   end;
   result := r64;
 end;
@@ -6425,17 +6551,11 @@ end;
 
 procedure mul64(a,b: cardinal; out product64: QWord);
 asm // Delphi is not efficient for x86 target with QWord -> optimize
-      imul    edx
-      mov     [ecx], eax
-      mov     [ecx + 4], edx
+      imul  edx
+      mov   [ecx], eax
+      mov   [ecx + 4], edx
 end;
 {$endif}
-
-const
-  BSON_DECIMAL128_EXPONENT_MAX=6111;
-  BSON_DECIMAL128_EXPONENT_MIN=-6176;
-  BSON_DECIMAL128_EXPONENT_BIAS=6176;
-  BSON_DECIMAL128_MAX_DIGITS=34;
 
 function TDecimal128.ToText(out Buffer: TDecimal128Str): integer;
 var dest: PUTF8Char;
@@ -6513,7 +6633,7 @@ begin
           break;
       end;
     end;
-    signdig := 36;
+    signdig := 36; // 4*9 = k*j loops above
     while dig^=0 do begin
       dec(signdig);
       inc(dig);
@@ -6601,12 +6721,17 @@ begin
 end;
 
 function TDecimal128.ToCurr: currency;
+begin
+  ToCurr(result);
+end;
+
+procedure TDecimal128.ToCurr(out result: currency);
 var tmp: TDecimal128Str;
     res64: Int64 absolute result;
 begin
-  if Bits.hi=$b038000000000000 then // fast direct conversion e.g. FromCurr
+  if Bits.hi=BSON_DECIMAL128_HI_CURRNEG then // fast direct conversion e.g. FromCurr
     res64 := -Bits.lo else
-  if Bits.hi=$3038000000000000 then
+  if Bits.hi=BSON_DECIMAL128_HI_CURRPOS then
     res64 := Bits.lo else begin
     tmp[ToText(tmp)] := #0; // makes ASCIIZ temporary text conversion
     res64 := StrToCurr64(@tmp);
@@ -6815,10 +6940,12 @@ begin
   end else begin
     mul64x64(signhi,100000000000000000,sign);
     inc(sign.L,signlo);
-    if (sign.c1<Int64Rec(signlo).Hi) or
-       ((sign.c1=Int64Rec(signlo).Hi) and
-        (sign.c0<Int64Rec(signlo).Lo)) then
-      // manual QWord "if significand.L<significand_low" for older compilers
+    {$ifdef FPC}
+    if sign.L<signlo then
+    {$else} // manual QWord processs (for oldest Delphi compilers)
+    if (sign.c1<TQWordRec(signlo).H) or
+       ((sign.c1=TQWordRec(signlo).H) and (sign.c0<TQWordRec(signlo).L)) then
+    {$endif}
       inc(sign.H);
   end;
   biasedexp := exp+BSON_DECIMAL128_EXPONENT_BIAS;
@@ -6842,16 +6969,23 @@ function TDecimal128.FromVariant(const value: variant): boolean;
 var txt: RawUTF8;
     wasString: boolean;
     bson: TBSONVariantData absolute value;
+    v64: Int64;
 begin
-  if TVarData(value).VType=varByRef or varVariant then
-    result := FromVariant(PVariant(TVarData(value).VPointer)^) else
-  if (bson.VType=BSONVariantType.VarType) and (bson.VKind=betDecimal128) then begin
-    Bits := PDecimal128(bson.VBlob)^.Bits;
-    result := true;
-  end else begin
-    VariantToUTF8(value,txt,wasString);
-    result := wasString and (FromText(txt)<>dsvError);
+  if bson.VType=varByRef or varVariant then begin
+    result := FromVariant(PVariant(TVarData(value).VPointer)^);
+    exit;
   end;
+  if (bson.VType=BSONVariantType.VarType) and (bson.VKind=betDecimal128) then
+    Bits := PDecimal128(bson.VBlob)^.Bits else
+  if VariantToInt64(value,v64) then
+    FromInt64(v64) else
+  if bson.VType=varCurrency then
+    FromCurr(TVarData(value).VCurrency) else begin
+    VariantToUTF8(value,txt,wasString);
+    result := FromText(txt)<>dsvError;
+    exit;
+  end;
+  result := true;
 end;
 
 initialization
@@ -6867,7 +7001,7 @@ initialization
   Assert(sizeof(TMongoReplyHeader)=36);
   // ensure TDocVariant and TBSONVariant custom types are registered
   if DocVariantType=nil then
-    DocVariantType := TDocVariant(SynRegisterCustomVariantType(TDocVariant));
+    DocVariantType := SynRegisterCustomVariantType(TDocVariant) as TDocVariant;
   BSONVariantType := SynRegisterCustomVariantType(TBSONVariant) as TBSONVariant;
   InitBSONObjectIDComputeNew;
 

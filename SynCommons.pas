@@ -1517,6 +1517,7 @@ type
     /// finalize the temporary storage, and create a RawUTF8 string from it
     procedure Done(EndBuf: pointer; var Dest: RawUTF8); overload; {$ifdef HASINLINE}inline;{$endif}
   private
+    // default 4KB buffer allocated on stack
     tmp: array[0..4095] of AnsiChar;
   end;
 
@@ -2373,6 +2374,14 @@ type
 function bswap32(a: cardinal): cardinal;
   {$ifdef FPC}inline;{$endif}
 
+/// convert the endianness of a given unsigned 64 bit integer into BigEndian
+function bswap64(const a: QWord): QWord;
+  {$ifdef FPC}inline;{$endif}
+
+/// convert the endianness of an array of unsigned 64 bit integer into BigEndian
+// - n is required to be > 0
+procedure bswap64array(a,b: PQWordArray; n: integer);
+
 {$ifndef ISDELPHI2007ANDUP}
 type
   TBytes = array of byte;
@@ -2391,15 +2400,17 @@ procedure BytesToRawByteString(const bytes: TBytes; out buf: RawByteString);
 /// creates a RawByteString memory buffer from an embedded resource
 // - returns '' if the resource is not found
 // - warning: resources size may be rounded up to alignment
+// - you can specify a library (dll) resource instance handle, if needed
 procedure ResourceToRawByteString(const ResName: string; ResType: PChar;
-  out buf: RawByteString);
+  out buf: RawByteString; Instance: THandle=0);
 
 /// creates a RawByteString memory buffer from an SynLZ-compressed embedded resource
 // - returns '' if the resource is not found
 // - this method would use SynLZDecompress() after ResourceToRawByteString(),
 // with a ResType=PChar(10) (i.e. RC_DATA)
+// - you can specify a library (dll) resource instance handle, if needed
 procedure ResourceSynLZToRawByteString(const ResName: string;
-  out buf: RawByteString);
+  out buf: RawByteString; Instance: THandle=0);
 
 {$ifndef ENHANCEDRTL} { is our Enhanced Runtime (or LVCL) library not installed? }
 
@@ -4040,7 +4051,7 @@ type
   //  minor differences in spelling
   // - this implementation is very fast and can be used e.g. to parse and search
   //  in a huge text buffer
-  // - This version also handles french and spanish pronunciations on request,
+  // - this version also handles french and spanish pronunciations on request,
   //  which differs from default Soundex, i.e. English
   TSynSoundEx = {$ifndef UNICODE}object{$else}record{$endif}
   private
@@ -4050,7 +4061,10 @@ type
     /// prepare for a Soundex search
     // - you can specify another language pronunciation than default english
     function Prepare(UpperValue: PAnsiChar;
-      Lang: TSynSoundExPronunciation=sndxEnglish): boolean;
+      Lang: TSynSoundExPronunciation=sndxEnglish): boolean; overload;
+    /// prepare for a custom Soundex search
+    // - you can specify any language pronunciation from raw TSoundExValues array
+    function Prepare(UpperValue: PAnsiChar; Lang: PSoundExValues): boolean; overload;
     /// return true if prepared value is contained in a text buffer
     // (UTF-8 encoded), by using the SoundEx comparison algorithm
     // - search prepared value at every word beginning in U^
@@ -4067,7 +4081,14 @@ type
 // - if next is defined, its value is set to the end of the encoded word
 // (so that you can call again this function to encode a full sentence)
 function SoundExAnsi(A: PAnsiChar; next: PPAnsiChar=nil;
-  Lang: TSynSoundExPronunciation=sndxEnglish): cardinal;
+  Lang: TSynSoundExPronunciation=sndxEnglish): cardinal; overload;
+
+/// Retrieve the Soundex value of a text word, from Ansi buffer
+// - Return the soundex value as an easy to use cardinal value, 0 if the
+// incoming string contains no valid word
+// - if next is defined, its value is set to the end of the encoded word
+// (so that you can call again this function to encode a full sentence)
+function SoundExAnsi(A: PAnsiChar; next: PPAnsiChar; Lang: PSoundExValues): cardinal; overload;
 
 /// Retrieve the Soundex value of a text word, from UTF-8 buffer
 // - Return the soundex value as an easy to use cardinal value, 0 if the
@@ -4176,6 +4197,21 @@ function ToText(C: TClass): RawUTF8; overload;
 /// just a wrapper around vmtClassName to avoid a string/RawUTF8 conversion
 procedure ToText(C: TClass; var result: RawUTF8); overload;
   {$ifdef HASINLINE}inline;{$endif}
+
+type
+  /// information about one method, as returned by GetPublishedMethods
+  TPublishedMethodInfo = record
+    /// the method name
+    Name: RawUTF8;
+    /// a callback to the method, for the given class instance
+    Method: TMethod;
+  end;
+  /// information about all methods, as returned by GetPublishedMethods
+  TPublishedMethodInfoDynArray = array of TPublishedMethodInfo;
+
+/// retrieve published methods information about any class instance
+// - will work with FPC and Delphi RTTI
+function GetPublishedMethods(Instance: TObject; out Methods: TPublishedMethodInfoDynArray): integer;
 
 {$ifdef LINUX}
 const
@@ -4882,8 +4918,7 @@ type
     procedure Insert(Index: Integer; const Elem);
     /// delete the whole dynamic array content
     // - this method will recognize T*ObjArray types and free all instances
-    procedure Clear;
-      {$ifdef HASINLINE}inline;{$endif}
+    procedure Clear; {$ifdef HASINLINE}inline;{$endif}
     /// delete the whole dynamic array content, ignoring exceptions
     // - returns true if no exception occured when calling Clear, false otherwise
     // - you should better not call this method, which will catch and ignore
@@ -7130,7 +7165,7 @@ type
   TSQLVarDynArray = array of TSQLVar;
 
   /// used to store bit set for all available fields in a Table
-  // - with current MAX_SQLFIELDS value, 256 bits uses 64 bytes of memory
+  // - with current MAX_SQLFIELDS value, 64 bits uses 8 bytes of memory
   // - see also IsZero() and IsEqual() functions
   // - you can also use ALL_FIELDS as defined in mORMot.pas
   TSQLFieldBits = set of 0..MAX_SQLFIELDS-1;
@@ -11448,6 +11483,14 @@ var
 // - you should use crc32c() function instead of crc32cfast() or crc32csse42()
 function crc32cfast(crc: cardinal; buf: PAnsiChar; len: cardinal): cardinal;
 
+/// compute CRC32C checksum on the supplied buffer using inlined code
+// - if the compiler supports inlining, will compute a slow but safe crc32c
+// checksum of the binary buffer, without calling the main crc32c() function
+// - may be used e.g. to identify patched executable at runtime, for a licensing
+// protection system
+function crc32cinlined(crc: cardinal; buf: PAnsiChar; len: cardinal): cardinal;
+  {$ifdef HASINLINE}inline;{$endif}
+
 /// compute CRC64C checksum on the supplied buffer, cascading two crc32c
 // - will use SSE 4.2 hardware accelerated instruction, if available
 // - will combine two crc32c() calls into a single Int64 result
@@ -11482,12 +11525,20 @@ type
   /// store a 192-bit hash value
   // - consumes 24 bytes of memory
   THash192 = array[0..23] of byte;
+  /// pointer to a 192-bit hash value
+  PHash192 = ^THash192;
   /// store a 256-bit hash value
   // - e.g. a SHA-256 digest, a TECCSignature result, or array[0..7] of cardinal
   // - consumes 32 bytes of memory
   THash256 = array[0..31] of byte;
   /// pointer to a 256-bit hash value
   PHash256 = ^THash256;
+  /// store a 384-bit hash value
+  // - e.g. a SHA-384 digest
+  // - consumes 48 bytes of memory
+  THash384 = array[0..47] of byte;
+  /// pointer to a 384-bit hash value
+  PHash384 = ^THash384;
   /// store a 512-bit hash value
   // - e.g. a SHA-512 digest, a TECCSignature result, or array[0..15] of cardinal
   // - consumes 64 bytes of memory
@@ -11636,6 +11687,23 @@ function IsEqual(const A,B: THash256): boolean; overload;
 // - may be used to cleanup stack-allocated content
 // ! ... finally FillZero(digest); end;
 procedure FillZero(out dig: THash256); overload;
+
+/// returns TRUE if all 48 bytes of this 384-bit buffer equal zero
+// - e.g. a SHA-384 digest
+function IsZero(const dig: THash384): boolean; overload;
+  {$ifdef HASINLINE}inline;{$endif}
+
+/// returns TRUE if all 48 bytes of both 384-bit buffers do match
+// - e.g. a SHA-384 digest
+// - this function is not sensitive to any timing attack, so is designed
+// for cryptographic purpose
+function IsEqual(const A,B: THash384): boolean; overload;
+  {$ifdef HASINLINE}inline;{$endif}
+
+/// fill all 32 bytes of this 384-bit buffer with zero
+// - may be used to cleanup stack-allocated content
+// ! ... finally FillZero(digest); end;
+procedure FillZero(out dig: THash384); overload;
 
 /// returns TRUE if all 64 bytes of this 512-bit buffer equal zero
 // - e.g. a SHA-512 digest
@@ -12749,7 +12817,8 @@ type
     // ! TSynTimeZone.Default.SaveToFile('TSynTimeZone.data');
     // then compile the resource as expected, with a brcc32 .rc entry:
     // ! TSynTimeZone 10 "TSynTimeZone.data"
-    procedure LoadFromResource;
+    // - you can specify a library (dll) resource instance handle, if needed
+    procedure LoadFromResource(Instance: THandle=0);
     /// write then time zone information into a compressed file
     // - if no file name is supplied, a ExecutableName.tz file would be created
     procedure SaveToFile(const FileName: TFileName);
@@ -20628,9 +20697,7 @@ begin
   case V.VType of
     vtInteger: value := V.VInteger;
     vtInt64:   value := V.VInt64^;
-    vtBoolean: if V.VBoolean then
-                 value := 1 else
-                 value := 0;
+    vtBoolean: if V.VBoolean then value := 1 else value := 0; // normalize
     {$ifndef NOVARIANTS}
     vtVariant: value := V.VVariant^;
     {$endif}
@@ -20647,9 +20714,7 @@ begin
   case V.VType of
     vtInteger: value := V.VInteger;
     vtInt64:   value := V.VInt64^;
-    vtBoolean: if V.VBoolean then
-                 value := 1 else
-                 value := 0;
+    vtBoolean: if V.VBoolean then value := 1 else value := 0; // normalize
     vtExtended: value := V.VExtended^;
     vtCurrency: value := V.VCurrency^;
     {$ifndef NOVARIANTS}
@@ -20708,8 +20773,9 @@ begin
     vtWideChar:
       RawUnicodeToUtf8(@V.VWideChar,1,tmpStr);
     vtBoolean: begin
-      Res.Temp[0] := AnsiChar(ord(V.VBoolean)+48);
-      Res.Text := @Res.Temp;
+      if V.VBoolean then // normalize
+        Res.Text := pointer(SmallUInt32UTF8[1]) else
+        Res.Text := pointer(SmallUInt32UTF8[0]);
       Res.Len := 1;
       result := 1;
       exit;
@@ -20812,7 +20878,7 @@ begin
     vtWideChar:
       RawUnicodeToUtf8(@VWideChar,1,result);
     vtBoolean:
-      if VBoolean then
+      if VBoolean then // normalize
         result := SmallUInt32UTF8[1] else
         result := SmallUInt32UTF8[0];
     vtInteger:
@@ -22811,7 +22877,7 @@ begin
   case VType of
   varNull,
   varEmpty:    Value := 0;
-  varBoolean:  Value := ord(VBoolean);
+  varBoolean:  if VBoolean then Value := 1 else Value := 0; // normalize
   varSmallint: Value := VSmallInt;
   {$ifndef DELPHI5OROLDER}
   varShortInt: Value := VShortInt;
@@ -22942,7 +23008,7 @@ begin
   case VType of
   varNull,
   varEmpty:    Value := 0;
-  varBoolean:  Value := ord(VBoolean);
+  varBoolean:  if VBoolean then Value := 1 else Value := 0; // normalize
   varSmallint: Value := VSmallInt;
   {$ifndef DELPHI5OROLDER}
   varShortInt: Value := VShortInt;
@@ -23370,27 +23436,99 @@ end;
 
 {$endif UNICODE}
 
+procedure bswap64array(a,b: PQWordArray; n: integer);
+{$ifdef CPUX86}
+asm
+    push  ebx
+@1: mov   ebx, dword ptr[eax]
+    bswap ebx
+    mov   dword ptr[edx + 4], ebx
+    mov   ebx, dword ptr[eax + 4]
+    bswap ebx
+    mov   dword ptr[edx], ebx
+    dec   ecx
+    lea   eax, [eax + 8]
+    lea   edx, [edx + 8]
+    jnz   @1
+    pop   ebx
+end;
+{$else}
+{$ifdef FPC}
+var i: integer;
+begin
+  for i := 0 to n-1 do
+    b^[i] := SwapEndian(a^[i]);
+end;
+{$else}
+asm
+    .NOFRAME // rcx=@a rdx=@b r8=n (Linux: rdi,rsi,rdx)
+@1: {$ifdef win64}
+    mov   rax, qword ptr[rcx]
+    bswap rax
+    mov   qword ptr[rdx], rax
+    dec   r8
+    lea   rcx, [rcx + 8]
+    lea   rdx, [rdx + 8]
+    {$else}
+    mov   rax, qword ptr[rdi]
+    bswap rax
+    mov   qword ptr[rsi], rax
+    dec   rdx
+    lea   rdi, [rdi + 8]
+    lea   rsi, [rsi + 8]
+    {$endif win64}
+    jnz @1
+end;
+{$endif}
+{$endif}
+
 {$ifdef FPC}
 function bswap32(a: cardinal): cardinal; inline;
 begin
   result := SwapEndian(a); // use fast platform-specific function
 end;
+
+function bswap64(const a: QWord): QWord;
+begin
+  result := SwapEndian(a); // use fast platform-specific function
+end;
+
 {$else}
 {$ifdef CPUX64}
 function bswap32(a: cardinal): cardinal;
 asm
   .NOFRAME // ecx=a (Linux: edi)
   {$ifdef win64}
-  mov eax,ecx
+  mov eax, ecx
   {$else}
-  mov eax,edi
+  mov eax, edi
   {$endif win64}
   bswap eax
 end;
+
+function bswap64(const a: QWord): QWord;
+asm
+  .NOFRAME // rcx=a (Linux: rdi)
+  {$ifdef win64}
+  mov rax, rcx
+  {$else}
+  mov rax, rdi
+  {$endif win64}
+  bswap rax
+end;
+
 {$else}
 {$ifdef CPUX86}
 function bswap32(a: cardinal): cardinal;
 asm
+  bswap eax
+end;
+
+function bswap64(const a: QWord): QWord;
+asm
+  mov edx, a.TQWordRec.L
+  bswap edx
+  mov eax, a.TQWordRec.H
   bswap eax
 end;
 {$else}
@@ -23399,10 +23537,15 @@ begin
   result := ((a and $ff)shl 24)or((a and $ff00)shl 8)or
             ((a and $ff0000)shr 8)or((a and $ff000000)shr 24);
 end;
+
+function bswap64(const a: QWord): QWord;
+begin
+  TQWordRec(result).L := bswap32(TQWordRec(a).H);
+  TQWordRec(result).H := bswap32(TQWordRec(a).L);
+end;
 {$endif CPUX86}
 {$endif CPUX64}
 {$endif FPC}
-
 
 {$ifndef PUREPASCAL} { these functions are implemented in asm }
 {$ifndef LVCL}       { don't define these functions twice }
@@ -24414,7 +24557,7 @@ end;
 
 function GotoEndOfQuotedString(P: PUTF8Char): PUTF8Char;
 var quote: AnsiChar;
-begin // P^='"' at function call
+begin // P^=" or P^=' at function call
   quote := P^;
   inc(P);
   repeat
@@ -24498,7 +24641,7 @@ begin
     result := nil;
     exit;
   end;
-  quote := P^;
+  quote := P^; // " or '
   inc(P);
   // compute unquoted string length
   PBeg := P;
@@ -25223,29 +25366,33 @@ begin
 end;
 
 procedure ResourceToRawByteString(const ResName: string; ResType: PChar;
-  out buf: RawByteString);
+  out buf: RawByteString; Instance: THandle);
 var HResInfo: THandle;
     HGlobal: THandle;
 begin
-  HResInfo := FindResource(HInstance,PChar(ResName),ResType);
+  if Instance=0 then
+    Instance := HInstance;
+  HResInfo := FindResource(Instance,PChar(ResName),ResType);
   if HResInfo=0 then
     exit;
-  HGlobal := LoadResource(HInstance,HResInfo);
+  HGlobal := LoadResource(Instance,HResInfo);
   if HGlobal<>0 then
-    SetString(buf,PAnsiChar(LockResource(HGlobal)),SizeofResource(HInstance,HResInfo));
+    SetString(buf,PAnsiChar(LockResource(HGlobal)),SizeofResource(Instance,HResInfo));
 end;
 
 procedure ResourceSynLZToRawByteString(const ResName: string;
-  out buf: RawByteString);
+  out buf: RawByteString; Instance: THandle);
 var HResInfo: THandle;
     HGlobal: THandle;
 begin
-  HResInfo := FindResource(HInstance,PChar(ResName),PChar(10));
+  if Instance=0 then
+    Instance := HInstance;
+  HResInfo := FindResource(Instance,PChar(ResName),PChar(10));
   if HResInfo=0 then
     exit;
-  HGlobal := LoadResource(HInstance,HResInfo);
+  HGlobal := LoadResource(Instance,HResInfo);
   if HGlobal<>0 then // direct decompression from memory mapped .exe content
-    SynLZDecompress(LockResource(HGlobal),SizeofResource(HInstance,HResInfo),buf);
+    SynLZDecompress(LockResource(HGlobal),SizeofResource(Instance,HResInfo),buf);
 end;
 
 function StrIComp(Str1, Str2: pointer): PtrInt;
@@ -26254,9 +26401,9 @@ begin
   until U=nil;
 end;
 
-function TSynSoundEx.Prepare(UpperValue: PAnsiChar; Lang: TSynSoundExPronunciation): boolean;
+function TSynSoundEx.Prepare(UpperValue: PAnsiChar; Lang: PSoundExValues): boolean;
 begin
-  fValues := SOUNDEXVALUES[Lang];
+  fValues := Lang;
   Search := SoundExAnsi(UpperValue,nil,Lang);
   if Search=0 then
     result := false else begin
@@ -26265,13 +26412,18 @@ begin
   end;
 end;
 
+function TSynSoundEx.Prepare(UpperValue: PAnsiChar; Lang: TSynSoundExPronunciation): boolean;
+begin
+  result := Prepare(UpperValue,SOUNDEXVALUES[Lang]);
+end;
+
 function SoundExAnsi(A: PAnsiChar; next: PPAnsiChar;
-  Lang: TSynSoundExPronunciation): cardinal;
+  Lang: PSoundExValues): cardinal;
 begin
   result := SoundExComputeFirstCharAnsi(A);
   if result<>0 then begin
     dec(result,ord('A')-1);   // first Soundex char is first char
-    SoundExComputeAnsi(A,result,SOUNDEXVALUES[Lang]);
+    SoundExComputeAnsi(A,result,Lang);
   end;
   if next<>nil then begin
     {$ifdef USENORMTOUPPER}
@@ -26281,6 +26433,12 @@ begin
     {$endif}
     next^ := A;
   end;
+end;
+
+function SoundExAnsi(A: PAnsiChar; next: PPAnsiChar;
+  Lang: TSynSoundExPronunciation): cardinal;
+begin
+  result := SoundExAnsi(A,next,SOUNDEXVALUES[Lang]);
 end;
 
 function SoundExUTF8(U: PUTF8Char; next: PPUTF8Char;
@@ -33418,8 +33576,24 @@ asm
         pop     ebx
         not     eax
 end;
-
 {$endif PUREPASCAL}
+
+function crc32cinlined(crc: cardinal; buf: PAnsiChar; len: cardinal): cardinal;
+{$ifdef HASINLINE}
+begin // slightly slower but inline-friendly code
+  result := not crc;
+  while len>0 do begin
+    result := crc32ctab[0,(result xor ord(buf^))and 255] xor (result shr 8);
+    dec(len);
+    inc(buf);
+  end;
+  result := not result;
+end;
+{$else}
+begin
+  result := crc32c(crc,buf,len);
+end;
+{$endif}
 
 {$ifdef CPUX86}
 procedure GetCPUID(Param: Cardinal; var Registers: TRegisters);
@@ -33617,15 +33791,43 @@ begin
   PInt64Array(@dig)^[3] := 0;
 end;
 
+function IsZero(const dig: THash384): boolean;
+var a: TPtrIntArray absolute dig;
+begin
+  result := (a[0]=0) and (a[1]=0) and (a[2]=0) and (a[3]=0) and (a[4]=0) and (a[5]=0)
+     {$ifndef CPU64} and (a[6]=0) and (a[7]=0) and (a[8]=0)
+                     and (a[9]=0) and (a[10]=0) and (a[11]=0){$endif};
+end;
+
+function IsEqual(const A,B: THash384): boolean;
+var a_: TPtrIntArray absolute A;
+    b_: TPtrIntArray absolute B;
+begin // uses anti-forensic time constant "xor/or" pattern
+  result := ((a_[0] xor b_[0]) or (a_[1] xor b_[1]) or
+             (a_[2] xor b_[2]) or (a_[3] xor b_[3]) or
+             (a_[4] xor b_[4]) or (a_[5] xor b_[5])
+    {$ifndef CPU64} or (a_[6] xor b_[6]) or (a_[7] xor b_[7])
+                    or (a_[8] xor b_[8]) or (a_[9] xor b_[9])
+                    or (a_[10] xor b_[10]) or (a_[11] xor b_[11]) {$endif})=0;
+end;
+
+procedure FillZero(out dig: THash384);
+begin
+  PInt64Array(@dig)^[0] := 0;
+  PInt64Array(@dig)^[1] := 0;
+  PInt64Array(@dig)^[2] := 0;
+  PInt64Array(@dig)^[3] := 0;
+  PInt64Array(@dig)^[4] := 0;
+  PInt64Array(@dig)^[5] := 0;
+end;
+
 function IsZero(const dig: THash512): boolean;
 var a: TPtrIntArray absolute dig;
 begin
   result := (a[0]=0) and (a[1]=0) and (a[2]=0) and (a[3]=0) and
             (a[4]=0) and (a[5]=0) and (a[6]=0) and (a[7]=0)
-     {$ifndef CPU64} and (a[8]=0) and (a[9]=0)
-                     and (a[10]=0) and (a[11]=0)
-                     and (a[12]=0) and (a[13]=0)
-                     and (a[14]=0) and (a[15]=0){$endif};
+     {$ifndef CPU64} and (a[8]=0) and (a[9]=0) and (a[10]=0) and (a[11]=0) and
+            (a[12]=0) and (a[13]=0) and (a[14]=0) and (a[15]=0){$endif};
 end;
 
 function IsEqual(const A,B: THash512): boolean;
@@ -33636,7 +33838,7 @@ begin // uses anti-forensic time constant "xor/or" pattern
              (a_[2] xor b_[2]) or (a_[3] xor b_[3]) or
              (a_[4] xor b_[4]) or (a_[5] xor b_[5]) or
              (a_[6] xor b_[6]) or (a_[7] xor b_[7])
-    {$ifndef CPU64} or (a_[8] xor b_[8]) or (a_[5] xor b_[5])
+    {$ifndef CPU64} or (a_[8] xor b_[8]) or (a_[9] xor b_[9])
                     or (a_[10] xor b_[10]) or (a_[11] xor b_[11])
                     or (a_[12] xor b_[12]) or (a_[13] xor b_[13])
                     or (a_[14] xor b_[14]) or (a_[15] xor b_[15]) {$endif})=0;
@@ -34748,10 +34950,10 @@ begin
   LoadFromBuffer(StringFromFile(FN));
 end;
 
-procedure TSynTimeZone.LoadFromResource;
+procedure TSynTimeZone.LoadFromResource(Instance: THandle);
 var buf: RawByteString;
 begin
-  ResourceToRawByteString(ClassName,PChar(10),buf);
+  ResourceToRawByteString(ClassName,PChar(10),buf,Instance);
   if buf<>'' then
     LoadFromBuffer(buf);
 end;
@@ -35708,6 +35910,50 @@ begin
   end;
 end;
 
+function GetPublishedMethods(Instance: TObject; out Methods: TPublishedMethodInfoDynArray): integer;
+  procedure AddParentsFirst(C: TClass);
+  type
+    TMethodInfo = packed record
+      {$ifdef FPC}
+      Name: PShortString;
+      Addr: Pointer;
+      {$else}
+      Len: Word;
+      Addr: Pointer;
+      Name: ShortString;
+      {$endif}
+    end;
+  var Table: {$ifdef FPC}PCardinalArray{$else}PWordArray{$endif};
+      M: ^TMethodInfo;
+      i: integer;
+  begin
+    if C=nil then
+      exit;
+    AddParentsFirst(C.ClassParent); // put children published methods afterward
+    Table := PPointer(PtrUInt(C)+PtrUInt(vmtMethodTable))^;
+    if Table=nil then
+      exit;
+    SetLength(Methods,result+Table^[0]);
+    M := @Table^[1];
+    for i := 1 to Table^[0] do  // Table^[0] = methods count
+      with Methods[result] do begin
+        ShortStringToAnsi7String(M^.Name{$ifdef FPC}^{$endif},Name);
+        Method.Data := Instance;
+        Method.Code := M^.Addr;
+        {$ifdef FPC}
+        inc(M);
+        {$else}
+        inc(PtrUInt(M),M^.Len);
+        {$endif}
+        inc(result);
+      end;
+  end;
+begin
+  result := 0;
+  if Instance<>nil then
+    AddParentsFirst(PPointer(Instance)^); // use recursion for adding
+end;
+
 function GetCaptionFromClass(C: TClass): string;
 var tmp: RawUTF8;
     P: PUTF8Char;
@@ -36475,7 +36721,7 @@ begin
     SetWindowLong(aWindow,GWL_WNDPROC,PtrInt(@DefWindowProc));
     {$endif CPU64}
     DestroyWindow(aWindow);
-    Windows.UnregisterClass(pointer(aWindowName),hInstance);
+    Windows.UnregisterClass(pointer(aWindowName),HInstance);
     aWindow := 0;
     aWindowName := '';
     result := true;
@@ -36663,7 +36909,7 @@ begin
       {$ifdef MSWINDOWS}
       ProgramFileName := paramstr(0);
       {$else}
-      ProgramFileName := GetModuleName(hInstance);
+      ProgramFileName := GetModuleName(HInstance);
       if ProgramFileName='' then
         ProgramFileName := ExpandFileName(paramstr(0));
       {$endif}
@@ -38155,6 +38401,7 @@ asm
   {$endif}
 end;
 
+{$ifdef CPUX86}
 procedure _InitializeRecord(P: Pointer; TypeInfo: Pointer);
 asm // faster version by AB
         { ->    EAX pointer to record to be finalized   }
@@ -38452,6 +38699,7 @@ asm  // faster version of _CopyRecord{dest, source, typeInfo: Pointer} by AB
         pop     ebp
 end;
 
+{$endif CPUX86}
 {$endif DOPATCHTRTL}
 {$endif FPC}
 
@@ -38478,7 +38726,7 @@ end;
     it fetch the corresponding cache line from memory into the cache hierarchy.
     By-passing the cache should enhance move() speed of big memory blocks. }
 
-procedure MoveSSE2; // Johan Bontes refactored revision
+procedure MoveJBon; // Johan Bontes refactored revision
 asm // rcx=Source, rdx=Dest, r8=Count
                .noframe
                .align 16
@@ -38685,7 +38933,7 @@ asm // rcx=Source, rdx=Dest, r8=Count
                jmp @IsAbove32_2
 end;
 
-procedure FillCharSSE2; // Johan Bontes refactored revision
+procedure FillCharJBon; // Johan Bontes refactored revision
 asm
               .noframe
               .align 16
@@ -38785,9 +39033,348 @@ asm
 @donefillhuge:mfence
 end;
 
+procedure Movex64; // A. Bouchez' version
+asm // rcx=Source, rdx=Dest, r8=Count
+        .noframe
+        mov     rax, r8
+        sub     rcx, rdx
+        je      @11
+        jnc     @03
+        add     rax, rcx
+        jc      @17
+@03:    cmp     r8, 8
+        jl      @09
+        test    dl, 07H
+        jz      @06
+        test    dl, 01H
+        jz      @04
+        mov     al, byte ptr[rcx + rdx]
+        dec     r8
+        mov     byte ptr[rdx], al
+        add     rdx, 1
+@04:    test    dl, 02H
+        jz      @05
+        mov     ax, word ptr[rcx + rdx]
+        sub     r8, 2
+        mov     word ptr[rdx], ax
+        add     rdx, 2
+@05:    test    dl, 04H
+        jz      @06
+        mov     eax, dword ptr[rcx + rdx]
+        sub     r8, 4
+        mov     dword ptr[rdx], eax
+        add     rdx, 4
+@06:    mov     r9, r8
+        shr     r9, 5
+        jnz     @12
+@07:    mov     r9, r8
+        shr     r9, 3
+        jz      @09
+        nop
+@08:    dec     r9
+        mov     rax, qword ptr[rcx + rdx]
+        mov     qword ptr[rdx], rax
+        lea     rdx, rdx + 8
+        jnz     @08
+        and     r8, 07H
+@09:    test    r8, r8
+        jle     @11
+@10:    dec     r8
+        mov     al, byte ptr[rcx + rdx]
+        mov     byte ptr[rdx], al
+        lea     rdx, rdx + 1
+        jnz     @10
+@11:    ret
+@12:    cmp     r9, 8192
+        jc      @13
+        cmp     rcx, 4096
+        jnc     @14
+@13:    dec     r9
+        lea     rdx, rdx + 32
+        mov     rax, qword ptr[rcx + rdx - 20H]
+        mov     r10, qword ptr[rcx + rdx - 18H]
+        mov     qword ptr[rdx - 20H], rax
+        mov     qword ptr[rdx - 18H], r10
+        mov     rax, qword ptr[rcx + rdx - 10H]
+        mov     r10, qword ptr[rcx + rdx - 8H]
+        mov     qword ptr[rdx - 10H], rax
+        mov     qword ptr[rdx - 8H], r10
+        jnz     @13
+        and     r8, 1FH
+        jmp     @07
+@14:    mov     eax, 32
+@15:    prefetchnta [rcx + rdx]
+        prefetchnta [rcx + rdx + 40H]
+        add     rdx, 128
+        dec     eax
+        jnz     @15
+        sub     rdx, 4096
+        mov     eax, 64
+@16:    add     rdx, 64
+        mov     r9, qword ptr[rcx + rdx - 40H]
+        mov     r10, qword ptr[rcx + rdx - 38H]
+        db      $4C, $0F, $C3, $4A, $C0 // movnti qword ptr [rdx-40H],r9
+        db      $4C, $0F, $C3, $52, $C8 // movnti qword ptr [rdx-38H],r10
+        mov     r9, qword ptr[rcx + rdx - 30H]
+        mov     r10, qword ptr[rcx + rdx - 28H]
+        db      $4C, $0F, $C3, $4A, $D0 // movnti qword ptr [rdx-30H],r9
+        db      $4C, $0F, $C3, $52, $D8 // movnti qword ptr [rdx-28H],r10
+        dec     eax
+        mov     r9, qword ptr[rcx + rdx - 20H]
+        mov     r10, qword ptr[rcx + rdx - 18H]
+        db      $4C, $0F, $C3, $4A, $E0 // movnti qword ptr [rdx-20H],r9
+        db      $4C, $0F, $C3, $52, $E8 // movnti qword ptr [rdx-18H],r10
+        mov     r9, qword ptr[rcx + rdx - 10H]
+        mov     r10, qword ptr[rcx + rdx - 8H]
+        db      $4C, $0F, $C3, $4A, $F0 // movnti qword ptr [rdx-10H],r9
+        db      $4C, $0F, $C3, $52, $F8 // movnti qword ptr [rdx-8H],r10
+        jnz     @16
+        sub     r8, 4096
+        cmp     r8, 4096
+        jnc     @14
+        mfence
+        jmp     @06
+@17:    add     rdx, r8
+        cmp     r8, 8
+        jl      @23
+        test    dl, 07H
+        jz      @20
+        test    dl, 01H
+        jz      @18
+        dec     rdx
+        mov     al, byte ptr[rcx + rdx]
+        dec     r8
+        mov     byte ptr[rdx], al
+@18:    test    dl, 02H
+        jz      @19
+        sub     rdx, 2
+        mov     ax, word ptr[rcx + rdx]
+        sub     r8, 2
+        mov     word ptr[rdx], ax
+@19:    test    dl, 04H
+        jz      @20
+        sub     rdx, 4
+        mov     eax, dword ptr[rcx + rdx]
+        sub     r8, 4
+        mov     dword ptr[rdx], eax
+@20:    mov     r9, r8
+        shr     r9, 5
+        jnz     @26
+@21:    mov     r9, r8
+        shr     r9, 3
+        jz      @23
+@22:    sub     rdx, 8
+        mov     rax, qword ptr[rcx + rdx]
+        dec     r9
+        mov     qword ptr[rdx], rax
+        jnz     @22
+        and     r8, 07H
+@23:    test    r8, r8
+        jle     @25
+@24:    dec     rdx
+        mov     al, byte ptr[rcx + rdx]
+        dec     r8
+        mov     byte ptr[rdx], al
+        jnz     @24
+@25:    ret
+@26:    cmp     r9, 8192
+        jc      @27
+        cmp     rcx,  - 4096
+        jc      @28
+@27:    sub     rdx, 32
+        mov     rax, qword ptr[rcx + rdx + 18H]
+        mov     r10, qword ptr[rcx + rdx + 10H]
+        mov     qword ptr[rdx + 18H], rax
+        mov     qword ptr[rdx + 10H], r10
+        dec     r9
+        mov     rax, qword ptr[rcx + rdx + 8H]
+        mov     r10, qword ptr[rcx + rdx]
+        mov     qword ptr[rdx + 8H], rax
+        mov     qword ptr[rdx], r10
+        jnz     @27
+        and     r8, 1FH
+        jmp     @21
+@28:    mov     eax, 32
+@29:    sub     rdx, 128
+        prefetchnta [rcx + rdx]
+        prefetchnta [rcx + rdx + 40H]
+        dec     eax
+        jnz     @29
+        add     rdx, 4096
+        mov     eax, 64
+@30:    sub     rdx, 64
+        sub     r8, 4096
+        mov     r9, qword ptr[rcx + rdx + 38H]
+        mov     r10, qword ptr[rcx + rdx + 30H]
+        db      $4C, $0F, $C3, $4A, $38 // movnti qword ptr [rdx+38H],r9
+        db      $4C, $0F, $C3, $52, $30 // movnti qword ptr [rdx+30H],r10
+        mov     r9, qword ptr[rcx + rdx + 28H]
+        mov     r10, qword ptr[rcx + rdx + 20H]
+        db      $4C, $0F, $C3, $4A, $28 // movnti qword ptr [rdx+28H],r9
+        db      $4C, $0F, $C3, $52, $20 // movnti qword ptr [rdx+20H],r10
+        dec     eax
+        mov     r9, qword ptr[rcx + rdx + 18H]
+        mov     r10, qword ptr[rcx + rdx + 10H]
+        db      $4C, $0F, $C3, $4A, $18 // movnti qword ptr [rdx+18H],r9
+        db      $4C, $0F, $C3, $52, $10 // movnti qword ptr [rdx+10H],r10
+        mov     r9, qword ptr[rcx + rdx + 8H]
+        mov     r10, qword ptr[rcx + rdx]
+        db      $4C, $0F, $C3, $4A, $08 // movnti qword ptr [rdx+8H],r9
+        db      $4C, $0F, $C3, $12 // movnti qword ptr [rdx],r10
+        jnz     @30
+        cmp     r8, 4096
+        jnc     @28
+        mfence
+        jmp     @20
+end;
+
+procedure FillCharx64; // A. Bouchez' version
+asm  // rcx=Dest rdx=Count r8=Value
+        .noframe
+        cmp     rdx, 32
+        mov     rax, r8
+        jle     @small
+        and     r8, 0FFH
+        mov     r9, 101010101010101H
+        imul    r8, r9
+        test    cl, 07H
+        jz      @27C5
+        test    cl, 01H
+        jz      @27A4
+        mov     byte ptr[rcx], r8b
+        add     rcx, 1
+        sub     rdx, 1
+@27A4:  test    cl, 02H
+        jz      @27B5
+        mov     word ptr[rcx], r8w
+        add     rcx, 2
+        sub     rdx, 2
+@27B5:  test    cl, 04H
+        jz      @27C5
+        mov     dword ptr[rcx], r8d
+        add     rcx, 4
+        sub     rdx, 4
+@27C5:  mov     rax, rdx
+        and     rdx, 3FH
+        shr     rax, 6
+        jnz     @27FD
+@27D2:  mov     rax, rdx
+        and     rdx, 07H
+        shr     rax, 3
+        jz      @27EC
+@27E0:  mov     qword ptr[rcx], r8
+        add     rcx, 8
+        dec     rax
+        jnz     @27E0
+@27EC:  test    rdx, rdx
+        jle     @27FC
+@27F1:  mov     byte ptr[rcx], r8b
+        inc     rcx
+        dec     rdx
+        jnz     @27F1
+@27FC:  ret
+@27FD:  cmp     rax, 8192
+        jnc     @2840
+@2810:  add     rcx, 64
+        mov     qword ptr[rcx - 40H], r8
+        mov     qword ptr[rcx - 38H], r8
+        mov     qword ptr[rcx - 30H], r8
+        mov     qword ptr[rcx - 28H], r8
+        dec     rax
+        mov     qword ptr[rcx - 20H], r8
+        mov     qword ptr[rcx - 18H], r8
+        mov     qword ptr[rcx - 10H], r8
+        mov     qword ptr[rcx - 8H], r8
+        jnz     @2810
+        jmp     @27D2
+@2840:  add     rcx, 64
+        db      $4C, $0F, $C3, $41, $C0 // movnti  qword ptr [rcx-40H],r8
+        db      $4C, $0F, $C3, $41, $C8 // movnti  qword ptr [rcx-38H],r8
+        db      $4C, $0F, $C3, $41, $D0 // movnti  qword ptr [rcx-30H],r8
+        db      $4C, $0F, $C3, $41, $D8 // movnti  qword ptr [rcx-28H],r8
+        dec     rax
+        db      $4C, $0F, $C3, $41, $E0 // movnti  qword ptr [rcx-20H],r8
+        db      $4C, $0F, $C3, $41, $E8 // movnti  qword ptr [rcx-18H],r8
+        db      $4C, $0F, $C3, $41, $F0 // movnti  qword ptr [rcx-10H],r8
+        db      $4C, $0F, $C3, $41, $F8 // movnti  qword ptr [rcx-8H],r8
+        jnz     @2840
+        mfence
+        jmp     @27D2
+@small: // rcx=Dest rdx=Count r8=Value<=32
+        test    rdx, rdx
+        jle     @@done
+        mov     ah, al
+        mov     [rcx + rdx - 1], al
+        lea     r8, [@table]
+        and     rdx,  - 2
+        neg     rdx
+        lea     rdx, [r8 + rdx * 2 + 64]
+        jmp     rdx
+@table: mov     [rcx + 30], ax
+        mov     [rcx + 28], ax
+        mov     [rcx + 26], ax
+        mov     [rcx + 24], ax
+        mov     [rcx + 22], ax
+        mov     [rcx + 20], ax
+        mov     [rcx + 18], ax
+        mov     [rcx + 16], ax
+        mov     [rcx + 14], ax
+        mov     [rcx + 12], ax
+        mov     [rcx + 10], ax
+        mov     [rcx + 8], ax
+        mov     [rcx + 6], ax
+        mov     [rcx + 4], ax
+        mov     [rcx + 2], ax
+        mov     [rcx], ax
+        ret
+@@done:
+end;
+
+procedure MoveERMSB; // Ivy Bridge+ Enhanced REP MOVSB/STOSB CPUs
+asm // rcx=Source, rdx=Dest, r8=Count
+        .noframe
+        test    r8, r8
+        jle     @none
+        cld
+        cmp     rdx, rcx
+        push    rsi
+        push    rdi
+        ja      @down
+        mov     rsi, rcx
+        mov     rdi, rdx
+        mov     rcx, r8
+        rep     movsb
+        pop     rdi
+        pop     rsi
+@none:  ret
+@down:  lea     rsi, [rcx + r8 - 1]
+        lea     rdi, [rdx + r8 - 1]
+        mov     rcx, r8
+        std
+        rep     movsb
+        cld
+        pop     rdi
+        pop     rsi
+end;
+
+procedure FillCharERMSB; // Ivy Bridge+ Enhanced REP MOVSB/STOSB CPUs
+asm // rcx=Dest, rdx=Count, r8b=Value
+        .noframe
+        test    rdx, rdx
+        jle     @none
+        cld
+        push    rdi
+        mov     rdi, rcx
+        mov     rax, r8
+        mov     rcx, rdx
+        rep     stosb
+        pop     rdi
+@none:
+end;
+
 function StrLenSSE2(S: pointer): PtrInt;
 asm // from GPL strlen64.asm by Agner Fog - www.agner.org/optimize
-        .NOFRAME
+        .noframe
         test    rcx, rcx
         mov     rax, rcx             // get pointer to string from rcx
         mov     r8, rcx              // copy pointer
@@ -39003,6 +39590,44 @@ asm // eax=source edx=dest ecx=count
         mov     [edx + 4], eax
 end;
 
+procedure FillCharERMSB; // Ivy Bridge+ Enhanced REP MOVSB/STOSB CPUs
+asm // eax=Dest edx=Count cl=Value
+      test    edx, edx
+      jle     @none
+      cld
+      push    edi
+      mov     edi, eax
+      mov     al, cl
+      mov     ecx, edx
+      rep     stosb
+      pop     edi
+@none:
+end;
+
+procedure MoveERMSB; // Ivy Bridge+ Enhanced REP MOVSB/STOSB CPUs
+asm // eax=source edx=dest ecx=count
+      test    ecx, ecx
+      jle     @none
+      cld
+      cmp     edx, eax
+      push    esi
+      push    edi
+      ja      @down
+      mov     esi, eax
+      mov     edi, edx
+      rep     movsb
+      pop     edi
+      pop     esi
+@none:ret
+@down:lea     esi, [eax + ecx - 1]
+      lea     edi, [edx + ecx - 1]
+      std
+      rep     movsb
+      pop     edi
+      pop     esi
+      cld
+end;
+
 function StrLenX86(S: pointer): PtrInt;
 // pure x86 function (if SSE2 not available) - faster than SysUtils' version
 asm
@@ -39170,8 +39795,14 @@ procedure InitRedirectCode;
 begin
   {$ifdef DELPHI5OROLDER}
   StrLen := @StrLenX86;
-  FillcharFast := @FillCharX87;
-  MoveFast := @MoveX87;
+  {$ifdef WITH_ERMS}
+  if cfERMS in CpuFeatures then begin
+    MoveFast := @MoveERMSB;
+    FillcharFast := @FillCharERMSB;
+  end else {$endif} begin
+    MoveFast := @MoveX87;
+    FillcharFast := @FillCharX87;
+  end;
   {$else}
   {$ifdef CPU64}
   {$ifdef HASAESNI}
@@ -39179,8 +39810,16 @@ begin
     StrLen := @StrLenSSE42 else
   {$endif}
     StrLen := @StrLenSSE2;
-  FillcharFast := @FillCharSSE2;
-  //MoveFast := @MoveSSE2; // actually slower than RTL's for small blocks
+  {$ifdef WITH_ERMS}
+  if cfERMS in CpuFeatures then begin
+    MoveFast := @MoveERMSB;
+    FillcharFast := @FillCharERMSB;
+  end else {$endif} begin
+    //MoveFast := @MoveJBon; // Johan Bontes' is actually slower than RTL's
+    //FillcharFast := @FillCharJBon; // this Johan Bontes' version is buggy
+    MoveFast := @Movex64;
+    FillCharFast := @Fillcharx64;
+  end;
   {$else}
   {$ifdef CPUINTEL}
   if cfSSE2 in CpuFeatures then begin
@@ -39192,9 +39831,12 @@ begin
     StrLen := @StrLenX86;
     FillcharFast := @FillCharX87;
   end;
-  MoveFast := @MoveX87; // SSE2 is not faster than X87 version on 32 bit CPU
-  {$else}
-  Pointer(@FillCharFast) := SystemFillCharAddress;
+  {$ifdef WITH_ERMS}
+  if cfERMS in CpuFeatures then begin
+    MoveFast := @MoveERMSB;
+    FillcharFast := @FillCharERMSB;
+  end else {$endif}
+    MoveFast := @MoveX87; // SSE2 is not faster than X87 version on 32 bit CPU
   {$endif CPUINTEL}
   {$endif CPU64}
   {$endif DELPHI5OROLDER}
@@ -39203,12 +39845,14 @@ begin
   if DebugHook=0 then begin // patch only outside debugging
     RedirectCode(SystemFillCharAddress,@FillcharFast);
     RedirectCode(@System.Move,@MoveFast);
+    {$ifdef CPUX86}
     RedirectCode(SystemRecordCopyAddress,@RecordCopy);
     RedirectCode(SystemFinalizeRecordAddress,@RecordClear);
     RedirectCode(SystemInitializeRecordAddress,@_InitializeRecord);
     {$ifndef UNICODE} // buggy Delphi 2009+ RTL expects a TMonitor.Destroy call
     RedirectCode(@TObject.CleanupInstance,@TObjectCleanupInstance);
     {$endif UNICODE}
+    {$endif}
   end;
   {$endif DOPATCHTRTL}
 end;
@@ -41978,9 +42622,8 @@ begin
       '.':
         if (json[1] in ['0'..'9']) and (json[2] in [#0,'0'..'9']) then
           if (json[2]=#0) or (json[3]=#0) or
-             ((json[3] in ['0'..'9']) and
-              (json[4]=#0) or
-              ((json[4] in ['0'..'9']) and (json[5]=#0))) then begin
+             ((json[3] in ['0'..'9']) and (json[4]=#0) or
+             ((json[4] in ['0'..'9']) and (json[5]=#0))) then begin
             result := varCurrency; // currency ###.1234 number
             exit;
           end else begin
@@ -42809,15 +43452,18 @@ begin
   SourceVValue := Source^.VValue; // local fast per-reference copy
   if Source<>@self then begin
     VType := DocVariantVType;
+    VCount := Source^.VCount;
+    pointer(VName) := nil;  // avoid GPF
+    pointer(VValue) := nil;
     VOptions := aOptions-[dvoIsArray,dvoIsObject]; // may not be same as Source
     if dvoIsArray in Source^.VOptions then
       include(VOptions,dvoIsArray) else
-    if dvoIsObject in Source^.VOptions then
+    if dvoIsObject in Source^.VOptions then begin
       include(VOptions,dvoIsObject);
-    VCount := Source^.VCount;
-    pointer(VName) := nil;  // avoid GPF
-    VName := Source^.VName;
-    pointer(VValue) := nil;
+      SetLength(VName,VCount);
+      for ndx := 0 to VCount-1 do
+        VName[ndx] := Source^.VName[ndx]; // manual copy is needed
+    end;
   end else begin
     SetOptions(aOptions);
     VariantDynArrayClear(VValue); // force re-create full copy of all values
@@ -45079,7 +45725,13 @@ begin
         result := 1 else
         result := 0;
     varBoolean:
-      result := ord(A.VBoolean)-ord(B.VBoolean);
+      if A.VBoolean then // normalize
+        if B.VBoolean then
+          result := 0 else
+          result := 1 else
+        if B.VBoolean then
+          result := -1 else
+          result := 0;
     varOleStr{$ifdef HASVARUSTRING},varUString{$endif}:
       if caseInsensitive then
         result := AnsiICompW(A.VAny,B.VAny) else
@@ -46592,15 +47244,15 @@ begin
   fSorted := false;
   if fValue=nil then
     exit; // avoid GPF if void
-  if fCountP<>nil then begin
+  if fCountP<>nil then begin // handle external capacity with separated Count
     delta := aCount-fCountP^;
     if delta=0 then
       exit;
-    fCountP^ := aCount;
+    fCountP^ := aCount; // store new length
     if PtrUInt(fValue^)=0 then begin
       // no capa yet
       if (delta>0) and (aCount<MINIMUM_SIZE) then
-        aCount := MINIMUM_SIZE; // reserve some minimal space for Add()
+        aCount := MINIMUM_SIZE; // reserve some minimal (64) items for Add()
     end else begin
       {$ifdef FPC}
       capa := PDynArrayRec(PtrUInt(fValue^)-SizeOf(TDynArrayRec))^.length;
@@ -46611,7 +47263,7 @@ begin
         // size-up -> grow by chunks
         if capa>=fCountP^ then
           exit; // no need to grow
-        inc(capa,capa shr 2);
+        inc(capa,capa shr 2); // growth factor = 1.5
         if capa<fCountP^ then
           aCount := fCountP^ else
           aCount := capa;
@@ -49112,7 +49764,7 @@ begin
   varDouble:   AddDouble(VDouble);
   varDate:     AddDateTime(@VDate,'T','"');
   varCurrency: AddCurr64(VInt64);
-  varBoolean:  Add(VBoolean);
+  varBoolean:  Add(VBoolean); // 'true'/'false'
   varVariant:  AddVariant(PVariant(VPointer)^,Escape);
   varString: begin
     if Escape=twJSONEscape then
@@ -50383,7 +51035,7 @@ begin
       end;
       Add('"');
     end;
-    vtBoolean:  Add(VBoolean);
+    vtBoolean:  Add(VBoolean); // 'true'/'false'
     vtInteger:  Add(VInteger);
     vtInt64:    Add(VInt64^);
     vtExtended: Add(VExtended^,DOUBLE_PRECISION);
@@ -50400,7 +51052,7 @@ begin
   with V do
   case Vtype of
   vtInteger:      Add(VInteger);
-  vtBoolean:      AddU(byte(VBoolean));
+  vtBoolean:      if VBoolean then Add('1') else Add('0'); // normalize
   vtChar:         Add(@VChar,1,Escape);
   vtExtended:     Add(VExtended^,DOUBLE_PRECISION);
   vtCurrency:     AddCurr64(VInt64^);
@@ -59958,24 +60610,12 @@ begin
   result := Default;
 end;
 
-{$ifdef FPC}
-function BooleanNormalize(value: boolean): integer; inline;
-begin
-  if value then
-    result := 1 else
-    result := 0;
-end;
-{$endif}
-
-var
-  /// a temporary buffer, big enough for using the SoundEx algorithm
-  SoundExtTmp: array[byte] of AnsiChar;
-
 function CompareOperator(FieldType: TSynTableFieldType; SBF, SBFEnd: PUTF8Char;
   Value: PUTF8Char; ValueLen: integer; Oper: TCompareOperator;
   CaseSensitive: boolean): boolean; overload;
 var L, Cmp: PtrInt;
     PB: PByte;
+    tmp: array[byte] of AnsiChar;
 begin
   result := true;
   if SBF<>nil then
@@ -60044,17 +60684,17 @@ begin
       soSoundsLikeEnglish,
       soSoundsLikeFrench,
       soSoundsLikeSpanish: begin
-        if L>high(SoundExtTmp) then
-          cmp := high(SoundExtTmp) else
-          cmp := L;
-        SoundExtTmp[cmp] := #0; // TSynSoundEx expect the buffer to be #0 terminated
-        MoveFast(SBF^,SoundExtTmp,cmp);
+        if L>high(tmp) then
+          Cmp := high(tmp) else
+          Cmp := L;
+        tmp[Cmp] := #0; // TSynSoundEx expect the buffer to be #0 terminated
+        MoveFast(SBF^,tmp,Cmp);
         case FieldType of
         tftWinAnsi:
-          if PSynSoundEx(Value)^.Ansi(SoundExtTmp) then
+          if PSynSoundEx(Value)^.Ansi(tmp) then
             exit;
         tftUTF8:
-          if PSynSoundEx(Value)^.UTF8(SoundExtTmp) then
+          if PSynSoundEx(Value)^.UTF8(tmp) then
             exit;
         else break;
         end;
@@ -64153,7 +64793,7 @@ function EventEquals(const eventA,eventB): boolean;
 var A: TMethod absolute eventA;
     B: TMethod absolute eventB;
 begin
-  result := (A.Code=B.Code) and (A.Data=B.Data); 
+  result := (A.Code=B.Code) and (A.Data=B.Data);
 end;
 
 var
@@ -64368,14 +65008,13 @@ initialization
   {$endif}
   MoveFast := @System.Move;
   {$ifdef FPC}
-  FillCharFast := @System.FillChar;
+  FillCharFast := @System.FillChar; // FPC cross-platform RTL is optimized enough
   {$else}
   {$ifdef CPUARM}
   FillCharFast := @System.FillChar;
   {$else}
-  {$ifdef USEPACKAGES}
   Pointer(@FillCharFast) := SystemFillCharAddress;
-  {$else}
+  {$ifndef USEPACKAGES}
   InitRedirectCode;
   {$endif USEPACKAGES}
   {$endif CPUARM}
