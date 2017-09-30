@@ -2,8 +2,8 @@ object Form1: TForm1
   Left = 192
   Top = 124
   Caption = 'Form1'
-  ClientHeight = 380
-  ClientWidth = 738
+  ClientHeight = 41
+  ClientWidth = 741
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
@@ -19,8 +19,8 @@ object Form1: TForm1
   object dbgrdData: TDBGrid
     Left = 0
     Top = 41
-    Width = 738
-    Height = 339
+    Width = 741
+    Height = 0
     Align = alClient
     DataSource = ds1
     TabOrder = 0
@@ -33,10 +33,11 @@ object Form1: TForm1
   object pnl1: TPanel
     Left = 0
     Top = 0
-    Width = 738
+    Width = 741
     Height = 41
     Align = alTop
     TabOrder = 1
+    ExplicitTop = -6
     object lblTiming: TLabel
       Left = 456
       Top = 13
@@ -50,6 +51,7 @@ object Form1: TForm1
       Width = 28
       Height = 13
       Caption = 'From:'
+      Visible = False
     end
     object chkViaTClientDataSet: TCheckBox
       Left = 216
@@ -58,10 +60,11 @@ object Form1: TForm1
       Height = 17
       Caption = 'Via TClientDataSet'
       TabOrder = 0
+      Visible = False
       OnClick = chkFromSQLClick
     end
     object cbbDataSource: TComboBox
-      Left = 72
+      Left = 74
       Top = 10
       Width = 129
       Height = 21
@@ -70,6 +73,7 @@ object Form1: TForm1
       ItemIndex = 0
       TabOrder = 1
       Text = 'JSON direct'
+      Visible = False
       OnChange = chkFromSQLClick
       Items.Strings = (
         'JSON direct'
@@ -83,12 +87,13 @@ object Form1: TForm1
         'SQLite3 SQL TDataSet')
     end
     object btnRefresh: TButton
-      Left = 360
-      Top = 8
+      Left = 359
+      Top = 10
       Width = 75
       Height = 25
       Caption = 'Refresh'
       TabOrder = 2
+      Visible = False
       OnClick = chkFromSQLClick
     end
     object btnApply: TButton
@@ -98,6 +103,7 @@ object Form1: TForm1
       Height = 25
       Caption = 'Apply Updates'
       TabOrder = 3
+      Visible = False
       OnClick = btnApplyClick
     end
   end

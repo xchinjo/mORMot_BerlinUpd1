@@ -99,6 +99,7 @@ var proxy: TSQLDBConnectionProperties;
     values: TDocVariantData;
     Timer: TPrecisionTimer;
 begin
+(*
   ds1.DataSet.Free;
   chkViaTClientDataSet.Enabled := not (cbbDataSource.ItemIndex in [1]);
   Timer.Start;
@@ -158,6 +159,8 @@ begin
     end;
   end;
   lblTiming.Caption := 'Processed in '+Ansi7ToString(Timer.Stop);
+
+  *)
 end;
 
 

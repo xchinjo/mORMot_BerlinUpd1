@@ -71,7 +71,7 @@ begin
     aModel := DataModel;
     VirtualTableExternalRegisterAll(aModel,aProps,[regMapAutoKeywordFields]); //[regMapAutoKeywordFields]
     try
-      aRestServer := TSQLRestServerDB.Create(aModel,SQLITE_MEMORY_DATABASE_NAME,false); //TSQLRestServerDB
+      aRestServer := TSQLRestServerDB.Create(aModel,SQLITE_MEMORY_DATABASE_NAME,true); //TSQLRestServerDB
       try
         aRestServer.CreateMissingTables;
 

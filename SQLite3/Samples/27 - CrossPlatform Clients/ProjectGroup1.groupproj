@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{929FED7B-C7D6-482F-BA86-1B811637B272}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="MobileClient.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Project14ServerHttpWrapper.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="MobileClient">
+        <MSBuild Projects="MobileClient.dproj"/>
+    </Target>
+    <Target Name="MobileClient:Clean">
+        <MSBuild Projects="MobileClient.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="MobileClient:Make">
+        <MSBuild Projects="MobileClient.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Project14ServerHttpWrapper">
+        <MSBuild Projects="Project14ServerHttpWrapper.dproj"/>
+    </Target>
+    <Target Name="Project14ServerHttpWrapper:Clean">
+        <MSBuild Projects="Project14ServerHttpWrapper.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Project14ServerHttpWrapper:Make">
+        <MSBuild Projects="Project14ServerHttpWrapper.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="MobileClient;Project14ServerHttpWrapper"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="MobileClient:Clean;Project14ServerHttpWrapper:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="MobileClient:Make;Project14ServerHttpWrapper:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

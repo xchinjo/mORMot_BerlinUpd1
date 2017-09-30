@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{EEFAE733-6184-4810-B8DA-3F72A871EC2C}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="Project16Client.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Project16ServerHttp.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="Project16Client">
+        <MSBuild Projects="Project16Client.dproj"/>
+    </Target>
+    <Target Name="Project16Client:Clean">
+        <MSBuild Projects="Project16Client.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Project16Client:Make">
+        <MSBuild Projects="Project16Client.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Project16ServerHttp">
+        <MSBuild Projects="Project16ServerHttp.dproj"/>
+    </Target>
+    <Target Name="Project16ServerHttp:Clean">
+        <MSBuild Projects="Project16ServerHttp.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Project16ServerHttp:Make">
+        <MSBuild Projects="Project16ServerHttp.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="Project16Client;Project16ServerHttp"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="Project16Client:Clean;Project16ServerHttp:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="Project16Client:Make;Project16ServerHttp:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

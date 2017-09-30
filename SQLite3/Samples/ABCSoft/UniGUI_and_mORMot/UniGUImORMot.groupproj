@@ -1,0 +1,60 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{63C686C1-DF06-4CCE-A9A7-921A85389185}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="web\web.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="Execute\Execute.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="RESTful\RESTserver.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="web">
+        <MSBuild Projects="web\web.dproj"/>
+    </Target>
+    <Target Name="web:Clean">
+        <MSBuild Projects="web\web.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="web:Make">
+        <MSBuild Projects="web\web.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Execute">
+        <MSBuild Projects="Execute\Execute.dproj"/>
+    </Target>
+    <Target Name="Execute:Clean">
+        <MSBuild Projects="Execute\Execute.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Execute:Make">
+        <MSBuild Projects="Execute\Execute.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="RESTserver">
+        <MSBuild Projects="RESTful\RESTserver.dproj"/>
+    </Target>
+    <Target Name="RESTserver:Clean">
+        <MSBuild Projects="RESTful\RESTserver.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="RESTserver:Make">
+        <MSBuild Projects="RESTful\RESTserver.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="web;Execute;RESTserver"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="web:Clean;Execute:Clean;RESTserver:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="web:Make;Execute:Make;RESTserver:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

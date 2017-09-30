@@ -1,6 +1,6 @@
 ﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
-        <ProjectGuid>{7722706C-A233-480C-86B8-3EB4CAE61DF2}</ProjectGuid>
+        <ProjectGuid>{08E07B1F-1213-48EF-8952-9F9534502BF3}</ProjectGuid>
         <MainSource>mORMotVCLTest.dpr</MainSource>
         <Base>True</Base>
         <Config Condition="'$(Config)'==''">Debug</Config>
