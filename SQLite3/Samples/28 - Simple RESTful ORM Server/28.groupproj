@@ -1,18 +1,12 @@
 ﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
-        <ProjectGuid>{370C4B5F-517A-4E38-9CFF-CEB796B1EC1F}</ProjectGuid>
+        <ProjectGuid>{11EB067C-84BE-4795-8122-A5B81FE4A949}</ProjectGuid>
     </PropertyGroup>
     <ItemGroup>
         <Projects Include="RESTclient.dproj">
             <Dependencies/>
         </Projects>
         <Projects Include="RESTserver.dproj">
-            <Dependencies/>
-        </Projects>
-        <Projects Include="fmxClient\fmxClient.dproj">
-            <Dependencies/>
-        </Projects>
-        <Projects Include="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj">
             <Dependencies/>
         </Projects>
     </ItemGroup>
@@ -41,32 +35,14 @@
     <Target Name="RESTserver:Make">
         <MSBuild Projects="RESTserver.dproj" Targets="Make"/>
     </Target>
-    <Target Name="fmxClient">
-        <MSBuild Projects="fmxClient\fmxClient.dproj"/>
-    </Target>
-    <Target Name="fmxClient:Clean">
-        <MSBuild Projects="fmxClient\fmxClient.dproj" Targets="Clean"/>
-    </Target>
-    <Target Name="fmxClient:Make">
-        <MSBuild Projects="fmxClient\fmxClient.dproj" Targets="Make"/>
-    </Target>
-    <Target Name="SimpleRestRequestSample">
-        <MSBuild Projects="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj"/>
-    </Target>
-    <Target Name="SimpleRestRequestSample:Clean">
-        <MSBuild Projects="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj" Targets="Clean"/>
-    </Target>
-    <Target Name="SimpleRestRequestSample:Make">
-        <MSBuild Projects="..\ABCSoft\SimpleRestClient\SimpleRestRequestSample.dproj" Targets="Make"/>
-    </Target>
     <Target Name="Build">
-        <CallTarget Targets="RESTclient;RESTserver;fmxClient;SimpleRestRequestSample"/>
+        <CallTarget Targets="RESTclient;RESTserver"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="RESTclient:Clean;RESTserver:Clean;fmxClient:Clean;SimpleRestRequestSample:Clean"/>
+        <CallTarget Targets="RESTclient:Clean;RESTserver:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="RESTclient:Make;RESTserver:Make;fmxClient:Make;SimpleRestRequestSample:Make"/>
+        <CallTarget Targets="RESTclient:Make;RESTserver:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>

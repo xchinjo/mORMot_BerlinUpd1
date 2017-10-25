@@ -177,6 +177,15 @@ object Form1: TForm1
     TabOrder = 5
     OnClick = Button1Click
   end
+  object btnGet: TButton
+    Left = 231
+    Top = 168
+    Width = 75
+    Height = 25
+    Caption = 'btnGet'
+    TabOrder = 6
+    OnClick = btnGetClick
+  end
   object DataSource1: TDataSource
     Left = 19
     Top = 193

@@ -67,7 +67,7 @@ object MainForm: TMainForm
   end
   object btnStart: TButton
     Left = 24
-    Top = 216
+    Top = 214
     Width = 129
     Height = 49
     Caption = 'Start'

@@ -69,16 +69,16 @@ begin
       [GetEnumName(TypeInfo(TRemoteSQLEngine),ord(aEngine))^]);
 
   //fProps := TYPES[aEngine].Create(aServerName,aDatabaseName,aUserID,aPassWord);
- {
-  FDPhysMySQLDriverLink := TFDPhysMySQLDriverLink.Create(Nil);
-  fProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server=rootcode.info;Port=3306','ErpDB','joni','P@ssw0rd123');
 
-  }
+  //FDPhysMySQLDriverLink := TFDPhysMySQLDriverLink.Create(Nil);
+  //fProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server=rootcode.info;Port=3306','ErpDB','joni','P@ssw0rd123');
+
+
 
   FDPhysFBDriverLink := TFDPhysFBDriverLink.Create(Nil);
   FDPhysFBDriverLink.VendorLib:='fbclient.dll';
-  fProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server=192.168.1.111','delsnet','root','delsnet');
-  //fProps := TSQLDBFireDACConnectionProperties.Create('IB?Server=rootcode.info;Port=3050','/fbdb/sam.fdb','SYSDBA','masterkey');
+  //fProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server=192.168.1.111','delsnet','root','delsnet');
+  fProps := TSQLDBFireDACConnectionProperties.Create('IB?Server=rootcode.info;Port=3050','/fbdb/sam.fdb','SYSDBA','masterkey');
 
   //fProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server=192.168.1.9','Shadow','insysc','insysc1234567890*');
   //GFFireDACConn := TSQLDBFireDACConnection.Create(fProps);

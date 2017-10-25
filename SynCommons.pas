@@ -1565,9 +1565,9 @@ type
 
   /// function prototype to be used for hashing of an element
   // - it must return a cardinal hash, with as less collision as possible
-  // - a good candidate is our crc32() function in optimized asm in SynZip unit
   // - TDynArrayHashed.Init will use crc32c() if no custom function is supplied,
-  // which will run either as software or SSE4.2 hardware
+  // which will run either as software or SSE4.2 hardware, with good colision
+  // for most used kind of data
   THasher = function(crc: cardinal; buf: PAnsiChar; len: cardinal): cardinal;
 
 var
@@ -8921,8 +8921,9 @@ type
   /// add locking methods to a standard TObjectList
   // - this class overrides the regular TObjectList, and do not share any code
   // with the TObjectListHashedAbstract/TObjectListHashed classes
-  // - caller has to call the Lock/Unlock methods by hand to protect the
-  // execution of regular TObjectList methods (like Add/Remove/Count...)
+  // - caller has to call the Safe.Lock/Unlock methods by hand to protect the
+  // execution of regular TObjectList methods (like Add/Remove/Count...),
+  // or use the SafeAdd/SafeRemove/SafeExists/SafeCount wrapper methods
   TObjectListLocked = class(TObjectList)
   protected
     fSafe: TSynLocker;
@@ -8933,6 +8934,14 @@ type
     constructor Create(AOwnsObjects: Boolean=true); reintroduce;
     /// release the list instance (including the locking resource)
     destructor Destroy; override;
+    /// Add an TObject instance using the global critical section
+    function SafeAdd(AObject: TObject): integer;
+    /// find and delete a TObject instance using the global critical section
+    function SafeRemove(AObject: TObject): integer;
+    /// find a TObject instance using the global critical section
+    function SafeExists(AObject: TObject): boolean;
+    /// returns the number of instances stored using the global critical section
+    function SafeCount: integer;
     /// the critical section associated to this list instance
     // - could be used to protect shared resources within the internal process
     // - use Safe.Lock/TryLock with a try ... finally Safe.Unlock block
@@ -11031,6 +11040,10 @@ function HexToBin(Hex: PAnsiChar; Bin: PByte; BinBytes: Integer): boolean; overl
 function HexToCharValid(Hex: PAnsiChar): boolean;
   {$ifdef HASINLINE}inline;{$endif}
 
+/// fast check if the supplied Hex buffer is an hexadecimal representation
+// of a binary buffer of a given number of bytes  
+function IsHex(const Hex: RawByteString; BinBytes: integer): boolean;
+
 /// fast conversion from one hexa char pair into a 8 bit AnsiChar
 // - return false if any invalid (non hexa) char is found in Hex^
 // - similar to HexToBin(Hex,Bin,1) but with Bin<>nil
@@ -11148,19 +11161,26 @@ function HexDisplayToBin(Hex: PAnsiChar; Bin: PByte; BinBytes: integer): boolean
 
 /// fast conversion from hexa chars into a cardinal
 // - reverse function of CardinalToHex()
+// - returns false and set aValue=0 if Hex is not a valid hexadecimal 32-bit
+// unsigned integer
+// - returns true and set aValue with the decoded number, on success
 function HexDisplayToCardinal(Hex: PAnsiChar; out aValue: cardinal): boolean;
     {$ifndef FPC}{$ifdef HASINLINE}inline;{$endif}{$endif}
     // inline gives an error under release conditions with FPC
 
 /// fast conversion from hexa chars into a cardinal
 // - reverse function of Int64ToHex()
+// - returns false and set aValue=0 if Hex is not a valid hexadecimal 64-bit
+// signed integer
+// - returns true and set aValue with the decoded number, on success
 function HexDisplayToInt64(Hex: PAnsiChar; out aValue: Int64): boolean; overload;
     {$ifndef FPC}{$ifdef HASINLINE}inline;{$endif}{$endif}
     { inline gives an error under release conditions with FPC }
 
 /// fast conversion from hexa chars into a cardinal
 // - reverse function of Int64ToHex()
-// - returns 0 if the supplied text buffer is not a valid 16-char hexadecimal
+// - returns 0 if the supplied text buffer is not a valid hexadecimal 64-bit
+// signed integer
 function HexDisplayToInt64(const Hex: RawByteString): Int64; overload;
   {$ifdef HASINLINE}inline;{$endif}
 
@@ -11473,7 +11493,7 @@ var
   // compatible with SSE 4.2 crc32 instruction
   // - tables content is created from code in initialization section below
   // - will also be used internally by SymmetricEncrypt, FillRandom and
-  // TSynUniqueIdentifierGenerator as master/reference key tables
+  // TSynUniqueIdentifierGenerator as 1KB master/reference key tables
   crc32ctab: array[0..{$ifdef PUREPASCAL}3{$else}7{$endif},byte] of cardinal;
 
 /// compute CRC32C checksum on the supplied buffer using x86/x64 code
@@ -11632,7 +11652,7 @@ procedure crc128c(buf: PAnsiChar; len: cardinal; out crc: THash128);
 // - its output won't match crc128c() value, which works on 8-bit input
 // - will use SSE 4.2 hardware accelerated instruction, if available
 // - is used e.g. by SynCrypto's TAESCFBCRC to check for data integrity
-procedure crcblock(crc128, data128: PBlock128);
+var crcblock: procedure(crc128, data128: PBlock128);
 
 /// compute a proprietary 128-bit CRC of 128-bit binary buffers
 // - apply four crc32c() calls on the 128-bit input chunks, into a 128-bit crc
@@ -11641,12 +11661,10 @@ procedure crcblock(crc128, data128: PBlock128);
 // - is used e.g. by SynEcc's TECDHEProtocol.ComputeMAC for macCrc128c
 procedure crcblocks(crc128, data128: PBlock128; count: integer);
 
-{$ifdef CPUINTEL}
 /// computation of our 128-bit CRC of a 128-bit binary buffer without SSE4.2
 // - to be used for regression tests only: crcblock will use the fastest
 // implementation available on the current CPU
 procedure crcblockNoSSE42(crc128, data128: PBlock128);
-{$endif}
 
 /// returns TRUE if all 16 bytes of this 128-bit buffer equal zero
 // - e.g. a MD5 digest, or an AES block
@@ -11751,11 +11769,15 @@ type
    cf_c16, cfPCID, cfDCA, cfSSE41, cfSSE42, cfX2A, cfMOVBE, cfPOPCNT,
    cfTSC2, cfAESNI, cfXS, cfOSXS, cfAVX, cfF16C, cfRAND, cfHYP,
    { extended features in EBX, ECX }
-   cfFSGS, cf_b01, cfSGX, cfBMI1, cfHLE, cfAVX2, cf_b06, cfSMEP, cfBMI2,
-   cfERMS, cfINVPCID, cfRTM, cfPQM, cf_b13, cfMPX, cfPQE, cfAVX512F,
-   cfAVX512DQ, cfRDSEED, cfADX, cfSMAP, cfAVX512IFMA, cfPCOMMIT,
-   cfCLFLUSH, cfCLWB, cfIPT, cfAVX512PF, cfAVX512ER, cfAVX512CD,
-   cfSHA, cfAVX512BW, cfAVX512VL, cfPREFW1, cfAVX512VBMI);
+   cfFSGS, cf_b01, cfSGX, cfBMI1, cfHLE, cfAVX2, cf_b06, cfSMEP,
+   cfBMI2, cfERMS, cfINVPCID, cfRTM, cfPQM, cf_b13, cfMPX, cfPQE,
+   cfAVX512F, cfAVX512DQ, cfRDSEED, cfADX, cfSMAP, cfAVX512IFMA, cfPCOMMIT, cfCLFLUSH,
+   cfCLWB, cfIPT, cfAVX512PF, cfAVX512ER, cfAVX512CD, cfSHA, cfAVX512BW, cfAVX512VL,
+   cfPREFW1, cfAVX512VBMI, cfUMIP, cfPKU, cfOSPKE, cf_c05, cf_c06, cf_c07,
+   cf_c08, cf_c09, cf_c10, cf_c11, cf_c12, cf_c13, cfAVX512VPC, cf_c15,
+   cf_cc16, cf_c17, cf_c18, cf_c19, cf_c20, cf_c21, cfRDPID, cf_c23,
+   cf_c24, cf_c25, cf_c26, cf_c27, cf_c28, cf_c29, cfSGXLC, cf_c31,
+   cf_d0, cf_d1, cfAVX512NNI, cfAVX512MAS, cf_d4, cf_d5, cf_d6, cf_d7);
 
   /// all features, as retrieved from an Intel CPU
   TIntelCpuFeatures = set of TIntelCpuFeature;
@@ -12688,8 +12710,10 @@ function DateTimeToUnixTime(const AValue: TDateTime): TUnixTime;
   {$ifdef HASINLINE}inline;{$endif}
 
 /// returns the current UTC date/time as a second-based c-encoded time
-//  - i.e. current number of seconds elapsed since Unix epoch 1/1/1970
+// - i.e. current number of seconds elapsed since Unix epoch 1/1/1970
 // - faster than NowUTC or GetTickCount64, on Windows or Unix platforms
+// (will use e.g. fast clock_gettime(CLOCK_REALTIME_COARSE) under Linux,
+// or GetSystemTimeAsFileTime under Windows)
 // - returns a 64-bit unsigned value, so is "Year2038bug" free
 function UnixTimeUTC: TUnixTime;
   {$ifndef MSWINDOWS}{$ifdef HASINLINE}inline;{$endif}{$endif}
@@ -12700,6 +12724,14 @@ function UnixTimeUTC: TUnixTime;
 // - use 'YYYY-MM-DDThh:mm:ss' format if Expanded
 function UnixTimeToString(const UnixTime: TUnixTime; Expanded: boolean=true;
   FirstTimeChar: AnsiChar='T'): RawUTF8;
+
+/// returns the current UTC date/time as a millisecond-based c-encoded time
+// - i.e. current number of milliseconds elapsed since Unix epoch 1/1/1970
+// - faster than NowUTC or GetTickCount64, on Windows or Unix platforms
+// (will use e.g. fast clock_gettime(CLOCK_REALTIME_COARSE) under Linux,
+// or GetSystemTimeAsFileTime under Windows)
+function UnixMSTimeUTC: TUnixMSTime;
+  {$ifndef MSWINDOWS}{$ifdef HASINLINE}inline;{$endif}{$endif}
 
 /// convert a millisecond-based c-encoded time (from Unix epoch 1/1/1970) as TDateTime
 function UnixMSTimeToDateTime(const UnixMSTime: TUnixMSTime): TDateTime;
@@ -18225,6 +18257,20 @@ function SynLZDecompress(const Data: RawByteString; out Len: integer;
 function SynLZDecompress(P: PAnsiChar; PLen: integer; out Len: integer;
   var tmp: RawByteString): pointer; overload;
 
+/// decode the header of a memory buffer compressed via SynCompress
+// - validates the crc32c of the compressed data, then return the uncompressed
+// size in bytes on success
+// - returns 0 if the crc32c does not match
+function SynLZDecompressHeader(P: PAnsiChar; PLen: integer): integer;
+
+/// decode the content of a memory buffer compressed via SynCompress
+// - BodyLen has been returned by a previous call to SynLZDecompressHeader
+// - SafeDecompression=true will use slower SynLZdecompress1partial() which
+// will avoid any buffer overflow
+function SynLZDecompressBody(P,Body: PAnsiChar; PLen,BodyLen: integer;
+  SafeDecompression: boolean=false): boolean;
+
+
 /// RLE compression of a memory buffer containing mostly zeros
 // - will store the number of consecutive zeros instead of plain zero bytes
 // - used for spare bit sets, e.g. TSynBloomFilter serialization
@@ -21917,9 +21963,14 @@ type
     );
     tkSet: (
       SetType: TOrdType;
+      {$ifdef FPC}
       {$ifdef FPC_REQUIRES_PROPER_ALIGNMENT}
-      tkSetAlignment:DWORD; // needed for correct alignment !!??
+      tkSetAlignment: DWORD; // needed for correct alignment !!??
       {$endif}
+      {$ifndef VER3_0}
+      //SetSize: SizeInt;
+      {$endif VER3_0}
+      {$endif FPC}
       SetBaseType: PTypeInfoStored;
     );
     tkFloat: (
@@ -22744,6 +22795,7 @@ function FindShortStringListExact(List: PShortString; MaxValue: integer;
   aValue: PUTF8Char; aValueLen: integer): integer;
 var PLen: integer;
 begin
+  if aValueLen<>0 then
   for result := 0 to MaxValue do begin
     PLen := ord(List^[0]);
     if (PLen=aValuelen) and IdemPropNameUSameLen(@List^[1],aValue,aValueLen) then
@@ -22757,6 +22809,7 @@ function FindShortStringListTrimLowerCase(List: PShortString; MaxValue: integer;
   aValue: PUTF8Char; aValueLen: integer): integer;
 var PLen: integer;
 begin
+  if aValueLen<>0 then
   for result := 0 to MaxValue do begin
     PLen := ord(List^[0]);
     inc(PUTF8Char(List));
@@ -22778,7 +22831,7 @@ function GetEnumNameValue(aTypeInfo: pointer; aValue: PUTF8Char; aValueLen: inte
 var List: PShortString;
     MaxValue: integer;
 begin
-  if GetEnumInfo(aTypeInfo,MaxValue,List) then begin
+  if (aValueLen<>0) and GetEnumInfo(aTypeInfo,MaxValue,List) then begin
     result := FindShortStringListExact(List,MaxValue,aValue,aValueLen);
     if (result<0) and AlsoTrimLowerCase then
       result := FindShortStringListTrimLowerCase(List,MaxValue,aValue,aValueLen);
@@ -22790,7 +22843,7 @@ function GetEnumNameValueTrimmed(aTypeInfo: pointer; aValue: PUTF8Char; aValueLe
 var List: PShortString;
     MaxValue: integer;
 begin
-  if GetEnumInfo(aTypeInfo,MaxValue,List) then
+  if (aValueLen<>0) and GetEnumInfo(aTypeInfo,MaxValue,List) then
     result := FindShortStringListTrimLowerCase(List,MaxValue,aValue,aValueLen) else
     result := -1;
 end;
@@ -23606,7 +23659,7 @@ asm // eax=Value, edx=@result
 @chgstr:mov     edx, dword ptr[ecx - 8] // reference count
         add     edx, 1
         jz      @newstr                 // refcount = -1 (string constant)
-lock    dec dword ptr[ecx - 8]  // decrement existing reference count
+lock    dec     dword ptr[ecx - 8]      // decrement existing reference count
 @newstr:push    eax                     // abs(value)
         mov     eax, esi                // length
         {$ifdef UNICODE}
@@ -26956,11 +27009,15 @@ end;
 function HexDisplayToCardinal(Hex: PAnsiChar; out aValue: cardinal): boolean;
 begin
   result := HexDisplayToBin(Hex,@aValue,sizeof(aValue));
+  if not result then
+   aValue := 0;
 end;
 
 function HexDisplayToInt64(Hex: PAnsiChar; out aValue: Int64): boolean;
 begin
   result := HexDisplayToBin(Hex,@aValue,sizeof(aValue));
+  if not result then
+   aValue := 0;
 end;
 
 function HexDisplayToInt64(const Hex: RawByteString): Int64;
@@ -26996,6 +27053,11 @@ begin
     if C>15 then exit;
   end;
   result := true; // conversion OK
+end;
+
+function IsHex(const Hex: RawByteString; BinBytes: integer): boolean;
+begin
+  result := (length(Hex)=BinBytes*2) and SynCommons.HexToBin(pointer(Hex),nil,BinBytes);
 end;
 
 function HexToCharValid(Hex: PAnsiChar): boolean;
@@ -33229,39 +33291,42 @@ asm // ecx=crc, rdx=buf, r8=len (Linux: edi,rsi,rdx)
         mov     rdx, rsi
         {$endif win64}
         not     eax
-        test    r8, r8
-        jz      @0
         test    rdx, rdx
         jz      @0
-@7:     test    rdx, 7
+        test    r8, r8
+        jz      @0
+@7:     test    dl, 7
         jz      @8 // align to 8 bytes boundary
         crc32   eax, byte ptr[rdx]
         inc     rdx
         dec     r8
         jz      @0
-        test    rdx, 7
+        test    dl, 7
         jnz     @7
 @8:     mov     rcx, r8
         shr     r8, 3
         jz      @2
-@1:     crc32   eax, dword ptr[rdx]
-        crc32   eax, dword ptr[rdx + 4]
+@1:     {$ifdef FPC}
+        crc32   rax, qword [rdx] // hash 8 bytes per loop
+        {$else}
+        db $F2,$48,$0F,$38,$F1,$02 // circumvent Delphi inline asm compiler bug
+        {$endif}
         dec     r8
         lea     rdx, [rdx + 8]
         jnz     @1
-@2:     and     rcx, 7
+@2:     and     ecx, 7
         jz      @0
-        cmp     rcx, 4
+        cmp     ecx, 4
         jb      @4
         crc32   eax, dword ptr[rdx]
-        sub     rcx, 4
+        sub     ecx, 4
         lea     rdx, [rdx + 4]
         jz      @0
 @4:     crc32   eax, byte ptr[rdx]
-        dec     rcx
+        dec     ecx
         jz      @0
         crc32   eax, byte ptr[rdx + 1]
-        dec     rcx
+        dec     ecx
         jz      @0
         crc32   eax, byte ptr[rdx + 2]
 @0:     not     eax
@@ -33271,13 +33336,9 @@ end;
 
 procedure crcblocks(crc128, data128: PBlock128; count: integer);
 begin
-  {$ifdef PUREPASCAL}
-  while count>0 do begin
-    crcblock(crc128,data128);
-  {$else}
   {$ifdef CPUX86}
   if (cfSSE42 in CpuFeatures) and (count>0) then
-  asm 
+  asm
         mov     ecx, crc128
         mov     edx, data128
 @s:     mov     eax, dword ptr[ecx]
@@ -33296,23 +33357,16 @@ begin
         lea     edx, [edx + 16]
         jnz     @s
   end else
-  while count>0 do begin
-    crcblockNoSSE42(crc128,data128); 
   {$else}
   while count>0 do begin
     crcblock(crc128,data128);
-  {$endif CPUX86}
-  {$endif PUREPASCAL}
     inc(data128);
     dec(count);
   end;
+  {$endif CPUX86}
 end;
 
-{$ifdef CPUINTEL}
 procedure crcblockNoSSE42(crc128, data128: PBlock128);
-{$else}
-procedure crcblock(crc128, data128: PBlock128);
-{$endif CPUINTEL}
 {$ifdef PUREPASCAL}
 var c: cardinal;
 begin
@@ -33390,7 +33444,7 @@ asm // Delphi is not efficient about compiling above pascal code
 end;
 {$endif}
 {$ifdef CPUINTEL}
-procedure crcblock(crc128, data128: PBlock128);
+procedure crcblockSSE42(crc128, data128: PBlock128);
 {$ifdef CPU64}
 {$ifdef FPC}nostackframe; assembler;
 asm
@@ -33398,12 +33452,20 @@ asm
 asm // rcx=crc128, rdx=data128 (Linux: rdi,rsi)
         .NOFRAME
 {$endif FPC}
-        test    byte ptr[rip + CpuFeatures + 6], $10 // cfSSE42 in CpuFeatures
-        jz      crcblockNoSSE42
         {$ifdef Linux}
-        mov     rcx, rdi
-        mov     rdx, rsi
-        {$endif Linux}
+        mov     eax, dword ptr[rdi]
+        mov     r8d, dword ptr[rdi + 4]
+        mov     r9d, dword ptr[rdi + 8]
+        mov     r10d, dword ptr[rdi + 12]
+        crc32   eax, dword ptr[rsi]
+        crc32   r8d, dword ptr[rsi + 4]
+        crc32   r9d, dword ptr[rsi + 8]
+        crc32   r10d, dword ptr[rsi + 12]
+        mov     dword ptr[rdi], eax
+        mov     dword ptr[rdi + 4], r8d
+        mov     dword ptr[rdi + 8], r9d
+        mov     dword ptr[rdi + 12], r10d
+        {$else}
         mov     eax, dword ptr[rcx]
         mov     r8d, dword ptr[rcx + 4]
         mov     r9d, dword ptr[rcx + 8]
@@ -33416,12 +33478,11 @@ asm // rcx=crc128, rdx=data128 (Linux: rdi,rsi)
         mov     dword ptr[rcx + 4], r8d
         mov     dword ptr[rcx + 8], r9d
         mov     dword ptr[rcx + 12], r10d
+        {$endif Linux}
 end;
 {$else}
 asm // eax=crc128, edx=data128
-        test    byte ptr[CpuFeatures + 6], $10 // cfSSE42 in CpuFeatures
         mov     ecx, eax
-        jz      crcblockNoSSE42
         {$ifdef ISDELPHI2010}
         mov     eax, dword ptr[ecx]
         crc32   eax, dword ptr[edx]
@@ -33640,7 +33701,7 @@ asm // eax=crc, edx=buf, ecx=len
 @3:     test    edx, 3
         jz      @8 // align to 4 bytes boundary
         {$ifdef ISDELPHI2010}
-        crc32   dword ptr eax, byte ptr[edx]
+        crc32   eax, byte ptr[edx]
         {$else}
         db      $F2, $0F, $38, $F0, $02
         {$endif}
@@ -33653,8 +33714,8 @@ asm // eax=crc, edx=buf, ecx=len
         shr     ecx, 3
         jz      @2
 @1:     {$ifdef ISDELPHI2010}
-        crc32   dword ptr eax, dword ptr[edx]
-        crc32   dword ptr eax, dword ptr[edx + 4]
+        crc32   eax, dword ptr[edx]
+        crc32   eax, dword ptr[edx + 4]
         {$else}
         db      $F2, $0F, $38, $F1, $02
         db      $F2, $0F, $38, $F1, $42, $04
@@ -33668,7 +33729,7 @@ asm // eax=crc, edx=buf, ecx=len
         cmp     ecx, 4
         jb      @4
         {$ifdef ISDELPHI2010}
-        crc32   dword ptr eax, dword ptr[edx]
+        crc32   eax, dword ptr[edx]
         {$else}
         db      $F2, $0F, $38, $F1, $02
         {$endif}
@@ -33676,13 +33737,13 @@ asm // eax=crc, edx=buf, ecx=len
         lea     edx, [edx + 4]
         jz      @0
 @4:     {$ifdef ISDELPHI2010}
-        crc32   dword ptr eax, byte ptr[edx]
+        crc32   eax, byte ptr[edx]
         dec     ecx
         jz      @0
-        crc32   dword ptr eax, byte ptr[edx + 1]
+        crc32   eax, byte ptr[edx + 1]
         dec     ecx
         jz      @0
-        crc32   dword ptr eax, byte ptr[edx + 2]
+        crc32   eax, byte ptr[edx + 2]
         {$else}
         db      $F2, $0F, $38, $F0, $02
         dec     ecx
@@ -33935,6 +33996,25 @@ end;
 {$else}
 begin
   result := GetUnixUTC; // direct retrieval from UNIX API
+end;
+{$endif}
+
+function UnixMSTimeUTC: TUnixMSTime;
+{$ifdef MSWINDOWS}
+var ft: TFileTime;
+    {$ifdef CPU64}nano100: Int64;{$endif}
+begin
+  GetSystemTimeAsFileTime(ft); // very fast, with 100 ns unit
+  {$ifdef CPU64}
+  FileTimeToInt64(ft,nano100);
+  result := (nano100-UnixFileTimeDelta) div 10000;
+  {$else} // use PInt64 to avoid URW699 with Delphi 6 / Kylix
+  result := (PInt64(@ft)^-UnixFileTimeDelta) div 10000;
+  {$endif}
+end;
+{$else}
+begin
+  result := GetUnixMSUTC; // direct retrieval from UNIX API
 end;
 {$endif}
 
@@ -36176,6 +36256,8 @@ begin // see http://www.garykessler.net/library/file_sigs.html
           result := true;
         else
         case PCardinalArray(Content)^[1] of // 4 byte offset
+        1{SYNLZCOMPRESS_SYNLZ}: // crc32 01 00 00 00 crc32 SynLZCompress() header
+          result := PCardinalArray(Content)^[0]<>PCardinalArray(Content)^[2];
         $70797466, // mp4,mov = 66 74 79 70 [33 67 70 35/4D 53 4E 56..]
         $766f6f6d: // mov = 6D 6F 6F 76
           result := true;
@@ -36199,16 +36281,14 @@ begin // see https://en.wikipedia.org/wiki/JPEG#Syntax_and_structure
     case ord(jpeg^) of
       $c0..$c3,$c5..$c7,$c9..$cb,$cd..$cf: begin // SOF
         Height := swap(PWord(jpeg+4)^);
-        Width := swap(PWord(jpeg+6)^);
+        Width  := swap(PWord(jpeg+6)^);
         result := (Height>0) and (Height<20000) and (Width>0) and (Width<20000);
         exit;
       end;
-      $d0..$d8,$01: // RST, SOI
-        inc(jpeg);
+      $d0..$d8,$01: inc(jpeg); // RST, SOI
       $d9: break;   // EOI
       $ff: ;        // padding
-      else
-        inc(jpeg,swap(PWord(jpeg+1)^)+1);
+      else inc(jpeg,swap(PWord(jpeg+1)^)+1);
     end;
   end;
 end;
@@ -39793,6 +39873,10 @@ end;
 
 procedure InitRedirectCode;
 begin
+  {$ifdef CPUINTEL}
+  if cfSSE42 in CpuFeatures then
+    crcblock := @crcblockSSE42;
+  {$endif CPUINTEL}
   {$ifdef DELPHI5OROLDER}
   StrLen := @StrLenX86;
   {$ifdef WITH_ERMS}
@@ -39803,24 +39887,25 @@ begin
     MoveFast := @MoveX87;
     FillcharFast := @FillCharX87;
   end;
-  {$else}
+  {$else DELPHI5OROLDER}
   {$ifdef CPU64}
   {$ifdef HASAESNI}
   if cfSSE42 in CpuFeatures then
     StrLen := @StrLenSSE42 else
-  {$endif}
+  {$endif HASAESNI}
     StrLen := @StrLenSSE2;
   {$ifdef WITH_ERMS}
   if cfERMS in CpuFeatures then begin
     MoveFast := @MoveERMSB;
     FillcharFast := @FillCharERMSB;
-  end else {$endif} begin
+  end else
+  {$endif WITH_ERMS} begin
     //MoveFast := @MoveJBon; // Johan Bontes' is actually slower than RTL's
     //FillcharFast := @FillCharJBon; // this Johan Bontes' version is buggy
     MoveFast := @Movex64;
     FillCharFast := @Fillcharx64;
   end;
-  {$else}
+  {$else CPU64}
   {$ifdef CPUINTEL}
   if cfSSE2 in CpuFeatures then begin
     if cfSSE42 in CpuFeatures then
@@ -45497,6 +45582,32 @@ begin
 end;
 
 function SortDynArrayInt64(const A,B): integer;
+{$ifdef CPUX86}
+asm // Delphi compiler is not efficient at compiling below code
+        mov     ecx, [eax]
+        mov     eax, [eax + 4]
+        cmp     eax, [edx + 4]
+        jnz     @nz
+        cmp     ecx, [edx]
+        jz      @0
+        jnb     @p
+@n:     or      eax, -1
+        ret
+@0:     xor     eax, eax
+        ret
+@nz:    jl      @n
+@p:     mov     eax, 1
+end;
+{$else}
+{$ifdef CPU64}
+begin
+  if Int64(A)<Int64(B) then
+    result := -1 else
+  if Int64(A)>Int64(B) then
+    result := 1 else
+    result := 0;
+end;
+{$else}
 var tmp: Int64;
 begin
   tmp := Int64(A)-Int64(B);
@@ -45506,6 +45617,8 @@ begin
     result := 1 else
     result := 0;
 end;
+{$endif}
+{$endif}
 
 function SortDynArrayPointer(const A,B): integer;
 begin
@@ -46735,7 +46848,7 @@ begin
         exit;
       end;
       Index := 0;
-      while Index<=n do begin
+      while Index<=n do begin // O(log(n)) binary search of the sorted position
         i := (Index+n) shr 1;
         cmp := fCompare(P[cardinal(i)*ElemSize],Elem);
         if cmp=0 then begin
@@ -46996,6 +47109,7 @@ begin
     exit;
   SetCapacity(Source.Capacity);
   n := Source.Count;
+  SetCount(n);
   if n<>0 then
     if ElemType=nil then
       if GetIsObjArray then
@@ -56634,6 +56748,46 @@ begin
   fSafe.Done;
 end;
 
+function TObjectListLocked.SafeAdd(AObject: TObject): integer;
+begin
+  Safe.Lock;
+  try
+    result := Add(AObject);
+  finally
+    Safe.UnLock;
+  end;
+end;
+
+function TObjectListLocked.SafeRemove(AObject: TObject): integer;
+begin
+  Safe.Lock;
+  try
+    result := Remove(AObject);
+  finally
+    Safe.UnLock;
+  end;
+end;
+
+function TObjectListLocked.SafeExists(AObject: TObject): boolean;
+begin
+  Safe.Lock;
+  try
+    result := IndexOf(AObject)>=0;
+  finally
+    Safe.UnLock;
+  end;
+end;
+
+function TObjectListLocked.SafeCount: integer;
+begin
+  Safe.Lock;
+  try
+    result := Count;
+  finally
+    Safe.UnLock;
+  end;
+end;
+
 
 { TRawUTF8ListHashed }
 
@@ -61665,16 +61819,16 @@ begin
   until (result=nil) or (sourcePosition>=sourceSize);
 end;
 
-const
-  SYNLZCOMPRESS_STORED = #0;
-  SYNLZCOMPRESS_SYNLZ = #1;
-
 function SynLZCompress(const Data: RawByteString; CompressionSizeTrigger: integer;
   CheckMagicForCompressed: boolean): RawByteString;
 begin
   SynLZCompress(pointer(Data),length(Data),result,CompressionSizeTrigger,
     CheckMagicForCompressed);
 end;
+
+const
+  SYNLZCOMPRESS_STORED = #0;
+  SYNLZCOMPRESS_SYNLZ = #1;
 
 procedure SynLZCompress(P: PAnsiChar; PLen: integer; out Result: RawByteString;
   CompressionSizeTrigger: integer; CheckMagicForCompressed: boolean);
@@ -61723,24 +61877,50 @@ begin
   SynLZDecompress(pointer(Data),Length(Data),result);
 end;
 
-procedure SynLZDecompress(P: PAnsiChar; PLen: integer; out Result: RawByteString);
-var len: integer;
+function SynLZDecompressHeader(P: PAnsiChar; PLen: integer): integer;
 begin
+  result := 0; // error
   if (PLen<=9) or (P=nil) or (crc32c(0,pointer(P+9),PLen-9)<>PCardinal(P+5)^) then
     exit;
   case P[4] of
   SYNLZCOMPRESS_STORED:
     if PCardinal(P)^=PCardinal(P+5)^ then
-      SetString(result,P+9,PLen-9);
-  SYNLZCOMPRESS_SYNLZ: begin
-    len := SynLZdecompressdestlen(P+9);
-    SetLength(result,len);
-    if (len<>0) and
-       ((SynLZDecompress1(P+9,PLen-9,pointer(result))<>len) or
-       (crc32c(0,pointer(result),len)<>PCardinal(P)^)) then
-      result := '';
+      result := PLen-9;
+  SYNLZCOMPRESS_SYNLZ:
+    result := SynLZdecompressdestlen(P+9);
   end;
+end;
+
+function SynLZDecompressBody(P,Body: PAnsiChar; PLen,BodyLen: integer;
+  SafeDecompression: boolean): boolean;
+begin
+  result := false;
+  case P[4] of
+  SYNLZCOMPRESS_STORED:
+    MoveFast(P[9],Body[0],BodyLen);
+  SYNLZCOMPRESS_SYNLZ:
+    if SafeDecompression then begin
+      if (SynLZDecompress1Partial(P+9,PLen-9,Body,BodyLen)<>BodyLen) or
+         (crc32c(0,Body,BodyLen)<>PCardinal(P)^) then
+        exit;
+    end else
+    if (SynLZDecompress1(P+9,PLen-9,Body)<>BodyLen) or
+       (crc32c(0,Body,BodyLen)<>PCardinal(P)^) then
+      exit;
+  else exit;
   end;
+  result := true;
+end;
+
+procedure SynLZDecompress(P: PAnsiChar; PLen: integer; out Result: RawByteString);
+var len: integer;
+begin
+  len := SynLZDecompressHeader(P,PLen);
+  if len=0 then
+    exit;
+  SetString(result,nil,len);
+  if not SynLZDecompressBody(P,pointer(result),PLen,len) then
+    result := '';
 end;
 
 function SynLZDecompress(const Data: RawByteString; out Len: integer;
@@ -61753,22 +61933,14 @@ function SynLZDecompress(P: PAnsiChar; PLen: integer; out Len: integer;
   var tmp: RawByteString): pointer;
 begin
   result := nil;
-  if (PLen<=9) or (P=nil) or (crc32c(0,pointer(P+9),PLen-9)<>PCardinal(P+5)^) then
+  Len := SynLZDecompressHeader(P,PLen);
+  if Len=0 then
     exit;
-  case P[4] of
-  SYNLZCOMPRESS_STORED:
-    if PCardinal(P)^=PCardinal(P+5)^ then begin
-      result := P+9;
-      Len := PLen-9;
-    end;
-  SYNLZCOMPRESS_SYNLZ: begin
-    Len := SynLZdecompressdestlen(P+9);
+  if P[4]=SYNLZCOMPRESS_STORED then
+    result := P+9 else begin
     SetString(tmp,nil,Len);
-    if (Len<>0) and
-       (SynLZDecompress1(P+9,PLen-9,pointer(tmp))=Len) and
-       (crc32c(0,pointer(tmp),Len)=PCardinal(P)^) then
+    if SynLZDecompressBody(P,pointer(tmp),PLen,len) then
       result := pointer(tmp);
-  end;
   end;
 end;
 
@@ -64853,7 +65025,9 @@ begin
   PIntegerArray(@CpuFeatures)^[1] := regs.ecx;
   GetCPUID(7,regs);
   PIntegerArray(@CpuFeatures)^[2] := regs.ebx;
-  PByteArray(@CpuFeatures)^[12] := regs.ecx;
+  PIntegerArray(@CpuFeatures)^[3] := regs.ecx;
+  PByte(@PIntegerArray(@CpuFeatures)^[4])^ := regs.edx;
+//  assert(sizeof(CpuFeatures)=4*4+1);
   {$ifdef Darwin}
   {$ifdef CPU64}
   // SSE42 asm does not (yet) work on Darwin x64 ...
@@ -65007,6 +65181,7 @@ initialization
   TestIntelCpuFeatures;
   {$endif}
   MoveFast := @System.Move;
+  crcblock := @crcblockNoSSE42;
   {$ifdef FPC}
   FillCharFast := @System.FillChar; // FPC cross-platform RTL is optimized enough
   {$else}

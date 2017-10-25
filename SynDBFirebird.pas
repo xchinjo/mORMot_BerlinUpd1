@@ -264,7 +264,7 @@ type
 const
   FBLIBNAME: array[boolean] of TFileName =
   {$ifdef MSWINDOWS}
-    ('fbclient.dll','fbembed.dll');
+    ('gds32.dll','fbembed.dll');
   {$endif}
   {$ifdef LINUX}
     ('libfbclient.so','libfbembed.so');

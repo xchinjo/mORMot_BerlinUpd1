@@ -9,18 +9,8 @@ uses
   {$endif}
   SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls,
-  SynCommons, mORMot, mORMotSQLite3, SynSQLite3,SynSQLite3Static,
-  mORMotHttpServer, SampleData,
-
-  SynDBFireDAC,
-
-  FireDAC.Phys.Oracle, FireDAC.Phys.MSAcc, FireDAC.Phys.MSSQL, FireDAC.Phys.MySQL,
-  FireDAC.Phys.SQLite, FireDAC.Phys.IB, FireDAC.Phys.PG, FireDAC.Phys.DB2
-
-  ,FireDAC.Phys.FBDef, FireDAC.Stan.Intf, FireDAC.Phys,
-  FireDAC.Phys.IBBase, FireDAC.Phys.FB;
-
-
+  SynCommons, mORMot, mORMotSQLite3, SynSQLite3Static,
+  mORMotHttpServer, SampleData;
 
 type
   TfrmMain = class(TForm)
@@ -41,9 +31,6 @@ type
 var
   frmMain: TfrmMain;
 
-  aProps : TSQLDBFireDACConnectionProperties;
-  FDPhysFBDriverLink: TFDPhysFBDriverLink;
-
 implementation
 
 uses
@@ -58,20 +45,10 @@ end;
 
 procedure TfrmMain.FormCreate(Sender: TObject);
 begin
-
-  FDPhysFBDriverLink := TFDPhysFBDriverLink.Create(Nil);
-  FDPhysFBDriverLink.VendorLib:='fbclient.dll';
-  //aProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server='+_SERVERIP,_DBNAME,_DBUSRNAME,_DBPASSWD);
-  aProps := TSQLDBFireDACConnectionProperties.Create('IB?Server=rootcode.info;Port=3050','/fbdb/sam.fdb','SYSDBA','masterkey');
-
-
   Model := CreateSampleModel;
-  VirtualTableExternalRegisterAll(Model,aProps,[regMapAutoKeywordFields]); //[regMapAutoKeywordFields]
-
-
-  DB := TSQLRestServerDB.Create(Model,SQLITE_MEMORY_DATABASE_NAME,false); //TSQLRestServerDB.Create(Model, 'Project19Server.db3', False);
+  DB := TSQLRestServerDB.Create(Model, 'Project19Server.db3', False);
   DB.CreateMissingTables;
-  Server := TSQLHttpServer.Create('8080',[DB],'+',HTTP_DEFAULT_MODE);
+  Server := TSQLHttpServer.Create('8888',[DB],'+',HTTP_DEFAULT_MODE);
   Server.AccessControlAllowOrigin := '*'; // allow cross-site AJAX queries
 end;
 

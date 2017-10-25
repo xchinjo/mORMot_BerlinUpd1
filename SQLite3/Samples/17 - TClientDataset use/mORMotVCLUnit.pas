@@ -6,20 +6,9 @@ uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Grids, DBGrids,
   SynCommons, mORMot, mORMotMidasVCL, mORMotVCL,
-  SynDB, SynDBSQLite3,
-   SynSQLite3Static,
-    SynDBRemote,
+  SynDB, SynDBSQLite3, SynSQLite3Static, SynDBRemote,
   SynVirtualDataset, SynDBMidasVCL, SynDBVCL,
-  DB, ExtCtrls, StdCtrls,
-
-
-  SynDBFireDAC,
-
-  FireDAC.Phys.Oracle, FireDAC.Phys.MSAcc, FireDAC.Phys.MSSQL, FireDAC.Phys.MySQL,
-  FireDAC.Phys.SQLite, FireDAC.Phys.IB, FireDAC.Phys.PG, FireDAC.Phys.DB2
-
-  ,FireDAC.Phys.FBDef, FireDAC.Stan.Intf, FireDAC.Phys,
-  FireDAC.Phys.IBBase, FireDAC.Phys.FB;
+  DB, ExtCtrls, StdCtrls;
 
 type
   TForm1 = class(TForm)
@@ -48,9 +37,6 @@ type
 var
   Form1: TForm1;
 
-    aProps : TSQLDBFireDACConnectionProperties;
-    FDPhysFBDriverLink: TFDPhysFBDriverLink;
-
 implementation
 
 {$R *.dfm}
@@ -66,24 +52,22 @@ const
 
 procedure TForm1.FormCreate(Sender: TObject);
 begin
-  fJSON := StringFromFile('People.json');
+  fJSON := StringFromFile('..\..\exe\People.json');
   if fJSON='' then
     fJSON := StringFromFile('..\..\People.json');
   if fJSON='' then
+    fJSON := StringFromFile('..\..\..\exe\People.json');
+  if fJSON='' then
     raise Exception.Create('No People.json');
-  fDBFileName :=  'test.db3';
+  fDBFileName :=  '..\..\exe\test.db3';
   if not FileExists(fDBFileName) then
     fDBFileName :=  '..\..\test.db3';
   if not FileExists(fDBFileName) then
+    fDBFileName :=  '..\..\..\exe\test.db3';
+  if not FileExists(fDBFileName) then
     raise Exception.Create('No test.db3');
-  //fProps := TSQLDBSQLite3ConnectionProperties.Create(StringToUTF8(fDBFileName),'','','');
-
-  FDPhysFBDriverLink := TFDPhysFBDriverLink.Create(Nil);
-  FDPhysFBDriverLink.VendorLib:='fbclient.dll';
-  //aProps := TSQLDBFireDACConnectionProperties.Create('MySQL?Server='+_SERVERIP,_DBNAME,_DBUSRNAME,_DBPASSWD);
-  aProps := TSQLDBFireDACConnectionProperties.Create('IB?Server=rootcode.info;Port=3050','/fbdb/sam.fdb','SYSDBA','masterkey');
-
-  fServer := SERVER_CLASS.Create(aProps,SERVER_NAME,SERVER_PORT,'user','pass');
+  fProps := TSQLDBSQLite3ConnectionProperties.Create(StringToUTF8(fDBFileName),'','','');
+  fServer := SERVER_CLASS.Create(fProps,SERVER_NAME,SERVER_PORT,'user','pass');
 end;
 
 procedure TForm1.FormDestroy(Sender: TObject);
@@ -93,13 +77,12 @@ begin
 end;
 
 procedure TForm1.chkFromSQLClick(Sender: TObject);
-const SQL_PEOPLE = 'select * from BIOLIFE';
+const SQL_PEOPLE = 'select * from People';
 var proxy: TSQLDBConnectionProperties;
     stmt: TSQLDBStatement;
     values: TDocVariantData;
     Timer: TPrecisionTimer;
 begin
-(*
   ds1.DataSet.Free;
   chkViaTClientDataSet.Enabled := not (cbbDataSource.ItemIndex in [1]);
   Timer.Start;
@@ -159,8 +142,6 @@ begin
     end;
   end;
   lblTiming.Caption := 'Processed in '+Ansi7ToString(Timer.Stop);
-
-  *)
 end;
 
 

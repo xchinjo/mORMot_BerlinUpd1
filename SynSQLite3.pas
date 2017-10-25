@@ -48,7 +48,7 @@ unit SynSQLite3;
   ***** END LICENSE BLOCK *****
 
 
-       SQLite3 3.19.2 database engine
+       SQLite3 3.20.1 database engine
       ********************************
 
      Brand new SQLite3 library to be used with Delphi
@@ -136,7 +136,7 @@ unit SynSQLite3;
   - moved all static .obj code into new SynSQLite3Static unit
   - allow either static .obj use via SynSQLite3Static or external .dll linking
     using TSQLite3LibraryDynamic to bind all APIs to the global sqlite3 variable
-  - updated SQLite3 engine to latest version 3.19.2
+  - updated SQLite3 engine to latest version 3.20.1
   - fixed: internal result cache is now case-sensitive for its SQL key values
   - raise an ESQLite3Exception if DBOpen method is called twice
   - added TSQLite3ErrorCode enumeration and sqlite3_resultToErrorCode()
@@ -1291,7 +1291,7 @@ type
     close: function(DB: TSQLite3DB): integer; {$ifndef SQLITE3_FASTCALL}cdecl;{$endif}
 
     /// Return the version of the SQLite database engine, in ascii format
-    // - currently returns '3.19.2', when used with our SynSQLite3Static unit
+    // - currently returns '3.20.1', when used with our SynSQLite3Static unit
     // - if an external SQLite3 library is used, version may vary
     // - you may use the VersionText property (or Version for full details) instead
     libversion: function: PUTF8Char; {$ifndef SQLITE3_FASTCALL}cdecl;{$endif}
@@ -2707,6 +2707,7 @@ type
     fDB: TSQLite3DB;
     fFileName: TFileName;
     fFileNameWithoutPath: TFileName;
+    fPageSize: cardinal;
     fFileDefaultCacheSize: integer;
     fIsMemory: boolean;
     fPassword: RawUTF8;
@@ -3629,12 +3630,12 @@ begin
     with PConcatRec(sqlite3.aggregate_context(Context,sizeof(TConcatRec)))^ do begin
       // +1 below for adding a final #0
       txt := sqlite3.value_text(argv[0]);
-      txtlen := SynCommons.strlen(txt);
+      txtlen := SynCommons.StrLen(txt);
       if result=nil then
         GetMem(result,txtlen+1)
       else begin
         sep := sqlite3.value_text(argv[1]);
-        seplen := SynCommons.strlen(sep);
+        seplen := SynCommons.StrLen(sep);
         ReallocMem(result,resultlen+txtlen+seplen+1);
         MoveFast(sep^,result[resultlen],seplen);
         inc(resultlen,seplen);
@@ -4424,6 +4425,7 @@ begin
     BackupBackgroundWaitUntilFinished;
   result := sqlite3.close(fDB);
   fDB := 0;
+  fPageSize := 0;
 end;
 
 {$ifndef DELPHI5OROLDER}
@@ -4546,8 +4548,8 @@ begin
   for i := 0 to fSQLFunctions.Count-1 do
     TSQLDataBaseSQLFunction(fSQLFunctions.List[i]).CreateFunction(DB);
   {$ifdef WITHLOG}
-  FPCLog.Log(sllDB,'"%" database file opened with PageSize=% and CacheSize=%',
-    [FileName,PageSize,CacheSize],self);
+  FPCLog.Log(sllDB,'"%" database file of % opened with PageSize=% and CacheSize=%',
+    [FileName,KB(GetFileSize),PageSize,CacheSize],self);
   {$endif}
 end;
 
@@ -4573,12 +4575,15 @@ end;
 
 function TSQLDataBase.GetPageSize: cardinal;
 begin
-  result := ExecuteNoExceptionInt64('PRAGMA page_size');
+  if fPageSize=0 then // can be cached, since known change once opened
+    fPageSize := ExecuteNoExceptionInt64('PRAGMA page_size');
+  result := fPageSize;
 end;
 
 procedure TSQLDataBase.SetPageSize(const Value: cardinal);
 begin
-  ExecuteNoException('PRAGMA page_size='+UInt32ToUTF8(Value));
+  if ExecuteNoException('PRAGMA page_size='+UInt32ToUTF8(Value)) then
+    fPageSize := Value;
 end;
 
 function TSQLDataBase.GetPageCount: cardinal;

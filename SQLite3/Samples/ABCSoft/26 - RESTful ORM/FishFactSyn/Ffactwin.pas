@@ -35,11 +35,14 @@ type
     cds: TClientDataSet;
     ds1: TDataSource;
     Button1: TButton;
+    btnGet: TButton;
     procedure FormCreate(Sender: TObject);
     procedure dbnvgr1Click(Sender: TObject; Button: TNavigateBtn);
     procedure btnUploadClick(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure Button1Click(Sender: TObject);
+    procedure btnGetClick(Sender: TObject);
+
   private
     { Private declarations }
     fImageLoader: TImageLoader;
@@ -207,7 +210,7 @@ begin
       cdsUpd.Next;
    end;
 
-
+   cdsUpd.MergeChangeLog;
    cdsUpd.StatusFilter:=[];
    cdsUpd.EnableControls;
 
@@ -230,6 +233,8 @@ begin
 
 end;
 
+
+
 procedure TForm1.dbnvgr1Click(Sender: TObject; Button: TNavigateBtn);
 begin
 {  case Button of
@@ -239,6 +244,58 @@ begin
   }
 end;
 
+procedure TForm1.btnGetClick(Sender: TObject);
+var
+  I: Integer;
+begin
+  fImageLoader := TImageLoader.Create;	// used to load image from blob fields
+
+  //http://1.4.157.59:8880/root/INVM_PROD
+  fServer := '127.0.0.1';
+  fPort := '8880';
+  fRoot := 'root';
+  fSQLModel := CreateSampleModel(fRoot);
+  //fSQLModel.Props[TSQLSALT_BOOKMOB].ExternalDB.MapField('ID','BOORUN');
+
+
+  fRestClient := TSQLHttpClient.Create(fServer, fPort, fSQLModel);
+  fRestClient.SetUser('User','synopse');
+
+  cds.Data:=GetCliRestDataset('SELECT * FROM INVM_PRICLIST');
+
+  (*
+  SynRestDataset := TSynRestDataset.Create(Nil);
+  SynRestDataset.RestClient := fRestClient;
+  SynRestDataset.CommandText := 'SELECT * FROM INVM_PRICLIST ';
+
+  // WHERE and/or ORDER BY clauses, and Parameters can be used as well.
+  //SynRestDataset.CommandText := 'SELECT * FROM BioLife '
+  //    + 'WHERE Species_No < :Species_No '
+  //    + 'ORDER BY Species_No ';
+  //SynRestDataset.Params.ParamByName('SPecies_No').Value := 100;
+  //SynRestDataset.AfterScroll := DoOnAfterScroll;
+  SynRestDataset.Open;
+
+
+
+
+  DataSource1.DataSet := SynRestDataset;
+  // show the first record image
+  DoOnAfterScroll(Nil);
+  // hide blob and ID fields in the grid
+
+  for I := 0 to DBGrid1.Columns.Count-1 do
+  begin
+    if (DBGrid1.Columns[I].Field.DataType = DB.ftBlob) then
+      DBGrid1.Columns[I].Visible := False
+    else if (DBGrid1.Columns[I].Field.FieldName = 'ID') then  // Hide the ID column
+      DBGrid1.Columns[I].Visible := False;
+  end;
+
+
+  *)
+
+end;
 procedure TForm1.btnUploadClick(Sender: TObject);
 var
   fID: Integer;

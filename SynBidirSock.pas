@@ -1113,7 +1113,10 @@ var
   WebSocketsBinarySynLzThreshold: integer = 450;
 
   /// how replay attacks will be handled in TWebSocketProtocolBinary encryption
-  WebSocketsIVReplayAttackCheck: TAESIVReplayAttackCheck = repCheckedIfAvailable;
+  // - you may set this global value to repCheckedIfAvailable if you are
+  // really paranoid (but resulting security may be lower, since the IV is
+  // somewhat more predictable than plain random)
+  WebSocketsIVReplayAttackCheck: TAESIVReplayAttackCheck = repNoCheck;
 
   /// the allowed maximum size, in MB, of a WebSockets frame
   WebSocketsMaxFrameMB: cardinal = 256;
@@ -2285,12 +2288,14 @@ begin
   result := false;
   fSafeIn.Enter;
   try
-    pending := fSocket.SockInPending(TimeOut);
+    pending := fSocket.SockInPending(TimeOut,false);
     if pending<0 then
       if IgnoreExceptions then
         exit else
         raise EWebSockets.CreateUTF8('SockInPending() Error % on %:%',
           [fSocket.LastLowSocketError,fSocket.Server,fSocket.Port]);
+    if pending=1 then // 0=noneinbufferorsocket, 1=onlybuffer, 2=enough
+      pending := fSocket.SockInPending(TimeOut,true); // aSocketForceCheck=true
     if pending<2 then
       exit; // not enough data available
     GetHeader;
@@ -2637,7 +2642,6 @@ var upgrade,uri,version,protocol,subprot,key,extin,extout: RawUTF8;
     P: PUTF8Char;
     Digest: TSHA1Digest;
     prot: TWebSocketProtocol;
-    i: integer;
 begin
   result := STATUS_BADREQUEST;
   if Context.fProcess<>nil then
@@ -2691,22 +2695,13 @@ begin
   ClientSock.SockSend;
   ClientSock.SockSendFlush;
   result := STATUS_SUCCESS; // connection upgraded: never back to HTTP/1.1
-  fWebSocketConnections.Safe.Lock;
-  fWebSocketConnections.Add(Context);
-  fWebSocketConnections.Safe.UnLock;
+  fWebSocketConnections.SafeAdd(Context);
   try
     Context.fProcess.ProcessLoop;
     ClientSock.KeepAliveClient := false; // always close connection
   finally
     FreeAndNil(Context.fProcess); // notify end of WebSockets
-    fWebSocketConnections.Safe.Lock;
-    try
-      i := fWebSocketConnections.IndexOf(Context);
-      if i>=0 then
-        fWebSocketConnections.Delete(i);
-    finally
-      fWebSocketConnections.Safe.UnLock;
-    end;
+    fWebSocketConnections.SafeRemove(Context);
   end;
 end;
 
@@ -2741,15 +2736,11 @@ begin
 end;
 
 function TWebSocketServer.IsActiveWebSocket(ConnectionThread: TSynThread): TWebSocketServerResp;
-var connectionIndex: Integer;
 begin
   result := nil;
   if Terminated or (ConnectionThread=nil) then
     exit;
-  fWebSocketConnections.Safe.Lock;
-  connectionIndex := fWebSocketConnections.IndexOf(ConnectionThread);
-  fWebSocketConnections.Safe.UnLock;
-  if (connectionIndex>=0) and
+  if fWebSocketConnections.SafeExists(ConnectionThread) and
      ConnectionThread.InheritsFrom(TWebSocketServerResp) then
     //  this request is a websocket, on a non broken connection
     result := TWebSocketServerResp(ConnectionThread);
@@ -2757,18 +2748,20 @@ end;
 
 function TWebSocketServer.IsActiveWebSocket(ConnectionID: integer): TWebSocketServerResp;
 var i: Integer;
+    c: ^TWebSocketServerResp;
 begin
   result := nil;
   if Terminated or (ConnectionID<=0) then
     exit;
   fWebSocketConnections.Safe.Lock;
   try
-    with fWebSocketConnections do
-    for i := 0 to Count-1 do
-      if TWebSocketServerResp(List[i]).ConnectionID=ConnectionID then begin
-        result := TWebSocketServerResp(List[i]);
+    c := pointer(fWebSocketConnections.List);
+    for i := 1 to fWebSocketConnections.Count do
+      if c^.ConnectionID=ConnectionID then begin
+        result := c^;
         exit;
-      end;
+      end else
+      inc(c);
   finally
     fWebSocketConnections.Safe.UnLock;
   end;

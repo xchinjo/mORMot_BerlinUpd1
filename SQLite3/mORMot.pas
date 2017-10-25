@@ -6013,12 +6013,12 @@ type
     fOutSetCookie: RawUTF8;
     fUserAgent: RawUTF8;
     fAuthenticationBearerToken: RawUTF8;
-    fAuthSession: TAuthSession;
+    fSession: TAuthSession; // not published to avoid unexpected GPF on access
     fServiceListInterfaceMethodIndex: integer;
     fClientKind: TSQLRestServerURIContextClientKind;
     // just a wrapper over @ServiceContext threadvar
     fThreadServer: PServiceRunningContext;
-    fSessionAccessRights: TSQLAccessRights; // session may be deleted meanwhile
+    fSessionAccessRights: TSQLAccessRights; // fSession may be deleted meanwhile
     {$ifndef NOVARIANTS}
     function GetInput(const ParamName: RawUTF8): variant;
     function GetInputOrVoid(const ParamName: RawUTF8): variant;
@@ -10920,7 +10920,7 @@ type
     // - by default, TAutoLocker and TLockedDocVariant will be registered by
     // this unit to implement IAutoLocker and ILockedDocVariant interfaces
     class procedure RegisterGlobal(aInterface: PTypeInfo;
-      aImplementationClass: TInterfacedObjectWithCustomCreateClass); overload;
+      aImplementationClass: TInterfacedObjectClass); overload;
     /// define a global instance for interface resolution
     // - most of the time, you will need a local DI/IoC resolution list; but
     // you may use this method to register a set of shared and global resolution
@@ -11206,7 +11206,7 @@ type
     class function GUID2TypeInfo(const aGUID: TGUID): PTypeInfo; overload;
     /// returns the list of all declared TInterfaceFactory
     // - as used by SOA and mocking/stubing features of this unit
-    class function GetUsedInterfaces: TObjectList;
+    class function GetUsedInterfaces: TObjectListLocked;
     /// add some TInterfaceFactory instances from their GUID
     class procedure AddToObjArray(var Obj: TInterfaceFactoryObjArray;
        const aGUIDs: array of TGUID);
@@ -15257,11 +15257,10 @@ type
   TAuthSession = class(TSynPersistent)
   protected
     fUser: TSQLAuthUser;
-    fLastAccess64: Int64;
     fID: RawUTF8;
     fIDCardinal: cardinal;
-    fTimeOutMS: cardinal;
-    fAccessRights: TSQLAccessRights;
+    fTimeOutTix: cardinal;
+    fTimeOutShr10: cardinal;
     fPrivateKey: RawUTF8;
     fPrivateSalt: RawUTF8;
     fSentHeaders: RawUTF8;
@@ -15269,6 +15268,7 @@ type
     fPrivateSaltHash: Cardinal;
     fLastTimeStamp: Cardinal;
     fExpectedHttpAuthentication: RawUTF8;
+    fAccessRights: TSQLAccessRights;
     fMethods: TSynMonitorInputOutputObjArray;
     fInterfaces: TSynMonitorInputOutputObjArray;
     function GetUserName: RawUTF8;
@@ -15295,8 +15295,9 @@ type
     // - this is a true TSQLAuthUser instance, and User.GroupRights will contain
     // also a true TSQLAuthGroup instance
     property User: TSQLAuthUser read fUser;
-    /// set by the Access() method to the current GetTickCount64() time stamp
-    property LastAccess64: Int64 read fLastAccess64;
+    /// set by the Access() method to the current GetTickCount64 shr 10
+    // timestamp + TimeoutSecs
+    property TimeOutTix: cardinal read fTimeOutTix;
     /// copy of the associated user access rights
     // - extracted from User.TSQLAuthGroup.SQLAccessRights
     property AccessRights: TSQLAccessRights read fAccessRights;
@@ -15325,10 +15326,10 @@ type
     property UserID: TID read GetUserID;
     /// the associated Group ID, as in User.GroupRights.ID
     property GroupID: TID read GetGroupID;
-    /// the number of milliseconds a session is kept alive
+    /// the timestamp (in numbers of 1024 ms) until a session is kept alive
     // - extracted from User.TSQLAuthGroup.SessionTimeout
-    // - allow direct comparison with GetTickCount64() API call
-    property TimeoutMS: cardinal read fTimeOutMS;
+    // - is used for fast comparison with GetTickCount64 shr 10
+    property TimeoutShr10: cardinal read fTimeOutShr10;
     /// the remote IP, if any
     // - is extracted from SentHeaders properties
     property RemoteIP: RawUTF8 read fRemoteIP;
@@ -15377,6 +15378,7 @@ type
   protected
     fServer: TSQLRestServer;
     fOptions: TSQLRestServerAuthenticationOptions;
+    fAlgoName: RawUTF8;
     // GET ModelRoot/auth?UserName=...&Session=... -> release session
     function AuthSessionRelease(Ctxt: TSQLRestServerURIContext): boolean;
     /// retrieve an User instance from its logon name
@@ -15434,9 +15436,10 @@ type
     // - method execution is protected by TSQLRestServer.fSessions.Lock
     function Auth(Ctxt: TSQLRestServerURIContext): boolean; virtual; abstract;
     /// called by the Server to check if the execution context match a session
-    // - returns a session instance corresponding to the remote request
+    // - returns a session instance corresponding to the remote request, and
+    // fill Ctxt.Session* members according to in-memory session information
     // - returns nil if this remote request does not match this authentication
-    // - method execution is protected by TSQLRestServer.fSessions.Lock
+    // - method execution should be protected by TSQLRestServer.fSessions.Lock
     function RetrieveSession(Ctxt: TSQLRestServerURIContext): TAuthSession; virtual; abstract;
     /// allow to tune the authentication process
     // - default value is [saoUserByLogonOrID]
@@ -15468,6 +15471,7 @@ type
   public
     /// will check URI-level signature
     // - retrieve the session ID from 'session_signature=...' parameter
+    // - method execution should be protected by TSQLRestServer.fSessions.Lock
     function RetrieveSession(Ctxt: TSQLRestServerURIContext): TAuthSession; override;
     /// class method to be called on client side to add the SessionID to the URI
     // - append '&session_signature=SessionID' to the url
@@ -15475,8 +15479,31 @@ type
       var Call: TSQLRestURIParams); override;
   end;
 
+  /// algorithms known by TSQLRestServerAuthenticationSignedURI to digitaly
+  // compute the session_signature parameter value for a given URI
+  // - by default, suaCRC32 will compute fast but not cryptographically secure
+  // ! crc32(crc32(privatesalt,timestamp,8),url,urllen)
+  // - suaCRC32C and suaXXHASH will be faster and slightly safer
+  // - but you can select other stronger alternatives, which result will be
+  // reduced to 32-bit hexadecimal - suaMD5 will be the fastest cryptographic
+  // hash available on all platforms, for enhanced security, by calling e.g.
+  // ! (aServer.AuthenticationRegister(TSQLRestServerAuthenticationDefault) as
+  // !   TSQLRestServerAuthenticationDefault).Algorithm := suaMD5;
+  // - suaSHA1, suaSHA256 and suaSHA512 will be the slowest, to provide
+  // additional level of trust, depending on your requirements: note that
+  // since the hash is reduced to 32-bit resolution, those may not provide
+  // higher security than suaMD5
+  // - note that SynCrossPlatformRest clients only implements suaCRC32 yet
+  TSQLRestServerAuthenticationSignedURIAlgo =
+    (suaCRC32, suaCRC32C, suaXXHASH, suaMD5, suaSHA1, suaSHA256, suaSHA512);
+
+  /// function prototype for TSQLRestServerAuthenticationSignedURI computation
+  // of the session_signature parameter value
+  TSQLRestServerAuthenticationSignedURIComputeSignature = function(
+    privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal of object;
+
   /// secure authentication scheme using URL-level digital signature
-  // - expected format of session_signature is
+  // - default suaCRC32 format of session_signature is
   // !Hexa8(SessionID)+
   // !Hexa8(TimeStamp)+
   // !Hexa8(crc32('SessionID+HexaSessionPrivateKey'+Sha256('salt'+PassWord)+
@@ -15486,13 +15513,32 @@ type
     fNoTimeStampCoherencyCheck: Boolean;
     fTimeStampCoherencySeconds: cardinal;
     fTimeStampCoherencyTicks: cardinal;
+    fComputeSignature: TSQLRestServerAuthenticationSignedURIComputeSignature;
     procedure SetNoTimeStampCoherencyCheck(value: boolean);
     procedure SetTimeStampCoherencySeconds(value: cardinal);
+    procedure SetAlgorithm(value: TSQLRestServerAuthenticationSignedURIAlgo);
+    // class functions implementing TSQLRestServerAuthenticationSignedURIAlgo
+    class function ComputeSignatureCrc32(privatesalt: cardinal;
+      timestamp, url: PAnsiChar; urllen: integer): cardinal;
+    class function ComputeSignatureCrc32c(privatesalt: cardinal;
+      timestamp, url: PAnsiChar; urllen: integer): cardinal;
+    class function ComputeSignaturexxHash(privatesalt: cardinal;
+      timestamp, url: PAnsiChar; urllen: integer): cardinal;
+    class function ComputeSignatureMD5(privatesalt: cardinal;
+      timestamp, url: PAnsiChar; urllen: integer): cardinal;
+    class function ComputeSignatureSHA1(privatesalt: cardinal;
+      timestamp, url: PAnsiChar; urllen: integer): cardinal;
+    class function ComputeSignatureSHA256(privatesalt: cardinal;
+      timestamp, url: PAnsiChar; urllen: integer): cardinal;
+    class function ComputeSignatureSHA512(privatesalt: cardinal;
+      timestamp, url: PAnsiChar; urllen: integer): cardinal;
+    class function GetComputeSignature(algo: TSQLRestServerAuthenticationSignedURIAlgo): TSQLRestServerAuthenticationSignedURIComputeSignature;
   public
     /// initialize the authentication method to a specified server
     constructor Create(aServer: TSQLRestServer); override;
     /// will check URI-level signature
     // - check session_signature=... parameter to be a valid digital signature
+    // - method execution should be protected by TSQLRestServer.fSessions.Lock
     function RetrieveSession(Ctxt: TSQLRestServerURIContext): TAuthSession; override;
     /// class method to be called on client side to sign an URI
     // - generate the digital signature as expected by overridden RetrieveSession()
@@ -15518,6 +15564,16 @@ type
     // WebSockets), even over a slow Internet connection
     property TimeStampCoherencySeconds: cardinal read fTimeStampCoherencySeconds
       write SetTimeStampCoherencySeconds;
+    /// customize the session_signature signing algorithm with a specific function
+    // - the very same function should be set on TSQLRestClientURI
+    // - to select a known hash algorithm, you may change the Algorithm property
+    property ComputeSignature: TSQLRestServerAuthenticationSignedURIComputeSignature
+      read fComputeSignature write fComputeSignature;
+    /// customize the session_signature signing algorithm
+    // - you need to set this value on the server side only; those known algorithms
+    // will be recognized by TSQLRestClientURI on the client side during the
+    // session handshake, to select the matching ComputeSignature function
+    property Algorithm: TSQLRestServerAuthenticationSignedURIAlgo write SetAlgorithm;
   end;
 
   /// mORMot secure RESTful authentication scheme
@@ -15609,6 +15665,7 @@ type
   public
     /// will check the caller signature
     // - retrieve the session ID from "Cookie: mORMot_session_signature=..." HTTP header
+    // - method execution should be protected by TSQLRestServer.fSessions.Lock
     function RetrieveSession(Ctxt: TSQLRestServerURIContext): TAuthSession; override;
     /// class method to be called on client side to sign an URI in Auth Basic
     // resolution is about 256 ms in the current implementation
@@ -15669,6 +15726,7 @@ type
     /// will check URI-level signature
     // - retrieve the session ID from 'session_signature=...' parameter
     // - will also check incoming "Authorization: Basic ...." HTTP header
+    // - method execution should be protected by TSQLRestServer.fSessions.Lock
     function RetrieveSession(Ctxt: TSQLRestServerURIContext): TAuthSession; override;
     /// handle the Auth RESTful method with HTTP Basic
     // - will first return HTTP_UNAUTHORIZED (401), then expect user and password
@@ -16431,6 +16489,7 @@ type
     fStaticVirtualTable: TSQLRestDynArray;
     /// in-memory storage of TAuthSession instances
     fSessions: TObjectListLocked;
+    fSessionsDeprecatedTix: cardinal;
     /// used to compute genuine TAuthSession.ID cardinal value
     fSessionCounter: cardinal;
     fSessionAuthentication: TSQLRestServerAuthenticationDynArray;
@@ -16543,7 +16602,7 @@ type
     // with afSessionAlreadyStartedForThisUser or afSessionCreationAborted reason
     procedure SessionCreate(var User: TSQLAuthUser; Ctxt: TSQLRestServerURIContext;
       out Session: TAuthSession); virtual;
-    /// fill the supplied context from the supplied aContext.Session ID
+    /// search for Ctxt.Session ID and fill Ctxt.Session* members if found 
     // - returns nil if not found, or fill aContext.User/Group values if matchs
     // - this method will also check for outdated sessions, and delete them
     // - this method is not thread-safe: caller should use fSessions.Lock
@@ -17075,10 +17134,13 @@ type
     /// call this method to add an authentication method to the server
     // - will return the just created TSQLRestServerAuthentication instance,
     // or the existing instance if it has already been registered
-    // - you can use this method to tune the authencation, e.g. if you have
+    // - you can use this method to tune the authentication, e.g. if you have
     // troubles with AJAX asynchronous callbacks:
     // ! (aServer.AuthenticationRegister(TSQLRestServerAuthenticationDefault) as
-    // !   TSQLRestServerAuthenticationSignedURI).NoTimeStampCoherencyCheck := true;
+    // !   TSQLRestServerAuthenticationDefault).NoTimeStampCoherencyCheck := true;
+    // or if you want to customize the session_signature parameter algorithm:
+    // ! (aServer.AuthenticationRegister(TSQLRestServerAuthenticationDefault) as
+    // !   TSQLRestServerAuthenticationDefault).Algorithm := suaMD5;
     function AuthenticationRegister(
       aMethod: TSQLRestServerAuthenticationClass): TSQLRestServerAuthentication; overload;
     /// call this method to add several authentication methods to the server
@@ -18539,6 +18601,7 @@ type
   // - handle RESTful commands GET POST PUT DELETE LOCK UNLOCK
   TSQLRestClientURI = class(TSQLRestClient)
   protected
+    fComputeSignature: TSQLRestServerAuthenticationSignedURIComputeSignature;
     fOnAuthentificationFailed: TOnAuthentificationFailed;
     fOnSetUser: TOnRestClientNotify;
     fMaximumAuthentificationRetry: Integer;
@@ -18666,6 +18729,12 @@ type
     // match your need
     function SetUser(const aUserName, aPassword: RawUTF8;
       aHashedPassword: Boolean=false): boolean;
+    /// customize the session_signature signing algorithm with a specific function
+    // - will be used by TSQLRestServerAuthenticationSignedURI classes,
+    // e.g. TSQLRestServerAuthenticationDefault instead of the algorithm
+    // specified by the server at session handshake
+    property ComputeSignature: TSQLRestServerAuthenticationSignedURIComputeSignature
+      read fComputeSignature write fComputeSignature;
     /// save the TSQLRestClientURI properties into a persistent storage object
     // - CreateFrom() will expect Definition.UserName/Password to store the
     // credentials which will be used by SetUser()
@@ -20156,6 +20225,7 @@ function ToText(V: TInterfaceMockSpyCheck): PShortString; overload;
 function ToText(m: TSQLURIMethod): PShortString; overload;
 function ToText(o: TSynTableStatementOperator): PShortString; overload;
 function ToText(t: TSQLVirtualTableTransaction): PShortString; overload;
+function ToText(a: TSQLRestServerAuthenticationSignedURIAlgo): PShortString; overload;
 function ToText(res: TNotifyAuthenticationFailedReason): PShortString; overload;
 
 
@@ -21564,15 +21634,17 @@ end;
 function TSQLPropInfoRTTIInt64.GetHash(Instance: TObject; CaseInsensitive: boolean): cardinal;
 var I64: Int64;
 begin
-  if fPropInfo.GetterIsField then
-    I64 := PInt64(fPropInfo.GetterAddr(Instance))^ else
+  if fGetterIsFieldPropOffset<>0 then
+    I64 := PInt64(PtrUInt(Instance)+fGetterIsFieldPropOffset)^ else
     I64 := fPropInfo.GetInt64Prop(Instance);
   result := crc32c(0,@I64,sizeof(I64)); // better hash distribution using crc32c
 end;
 
 procedure TSQLPropInfoRTTIInt64.GetJSONValues(Instance: TObject; W: TJSONSerializer);
 begin
-  W.Add(fPropInfo.GetInt64Prop(Instance));
+  if fGetterIsFieldPropOffset<>0 then
+    W.Add(PInt64(PtrUInt(Instance)+fGetterIsFieldPropOffset)^) else
+    W.Add(fPropInfo.GetInt64Prop(Instance));
 end;
 
 procedure TSQLPropInfoRTTIInt64.GetValueVar(Instance: TObject;
@@ -22847,6 +22919,7 @@ end;
 
 function TSQLPropInfoRTTIDynArray.CompareValue(Item1, Item2: TObject; CaseInsensitive: boolean): PtrInt;
 var da1,da2: TDynArray;
+    i: integer;
 begin
   if Item1=Item2 then
     result := 0 else
@@ -22856,9 +22929,18 @@ begin
     result := 1 else begin
     GetDynArray(Item1,da1);
     GetDynArray(Item2,da2);
-    if da1.Equals(da2) then
-      result := 0 else
-      result := PtrInt(Item1)-PtrInt(Item2); // pseudo comparison
+    result := da1.Count-da2.Count;
+    if result<>0 then
+      exit;
+    result := PtrInt(Item1)-PtrInt(Item2); // pseudo comparison
+    if fObjArray<>nil then begin
+      for i := 0 to da1.Count-1 do
+        if not ObjectEquals(PObjectArray(da1.Value^)[i],PObjectArray(da2.Value^)[i]) then
+          exit;
+    end else
+      if not da1.Equals(da2) then
+        exit;
+    result := 0;
   end;
 end;
 
@@ -24850,7 +24932,7 @@ function TSQLTable.FieldPropFromTables(const PropName: RawUTF8;
       PropInfo := fQueryTables[aTableIndex].RecordProps.Fields.ByName(aPropName);
       if PropInfo<>nil then begin
         result := PropInfo.SQLFieldTypeStored;
-        if result<>sftUnknown then 
+        if result<>sftUnknown then
           TableIndex := aTableIndex;
         exit;
       end;
@@ -24860,6 +24942,7 @@ function TSQLTable.FieldPropFromTables(const PropName: RawUTF8;
 var i,t: integer;
 begin
   TableIndex := -1;
+  result := sftUnknown;
   if fQueryTableIndexFromSQL=-2 then begin
     fQueryTableIndexFromSQL := -1;
     if (fQueryTables<>nil) and (QueryTableNameFromSQL<>'') then
@@ -24891,7 +24974,6 @@ begin
           SearchInQueryTables(@PropName[i+2],t);
           exit;
         end;
-    result := sftUnknown;
   end;
 end;
 
@@ -25187,7 +25269,7 @@ begin
       exit; // valid hexa data
   end else
   if (PInteger(P)^ and $00ffffff=JSON_BASE64_MAGIC) and IsBase64(@P[3],Len-3) then begin
-    // Base-64 encoded content ('\uFFF0base64encodedbinary')
+    // safe decode Base-64 content ('\uFFF0base64encodedbinary')
     Base64ToBin(@P[3],Len-3,RawByteString(result));
     exit;
   end;
@@ -28611,13 +28693,13 @@ begin
       case PropType^.FloatType of
       ftCurr: begin
         if GetterIsField and ((@self=DestInfo) or DestInfo^.GetterIsField) then
-          result := GetInt64Value(Source)=DestInfo^.GetInt64Value(Dest) else
+          result := PInt64(GetterAddr(Source))^=PInt64(DestInfo.GetterAddr(Dest))^ else
           result := GetCurrencyProp(Source)=DestInfo^.GetCurrencyProp(Dest);
         exit;
       end;
       ftDoub: begin
         if GetterIsField and ((@self=DestInfo) or DestInfo^.GetterIsField) then
-          result := GetInt64Value(Source)=DestInfo^.GetInt64Value(Dest) else
+          result := PInt64(GetterAddr(Source))^=PInt64(DestInfo.GetterAddr(Dest))^ else
           result := SynCommons.SameValue(GetDoubleProp(Source),DestInfo^.GetDoubleProp(Dest));
         exit;
       end;
@@ -28631,7 +28713,7 @@ begin
         if DynArrayIsObjArray and
            ((@self=DestInfo) or DestInfo^.DynArrayIsObjArray) then begin
           for i := 0 to daS.Count-1 do
-            if not ObjectEquals(PObjectArray(daS.Value)[i],PObjectArray(daD.Value)[i]) then
+            if not ObjectEquals(PObjectArray(daS.Value^)[i],PObjectArray(daD.Value^)[i]) then
               exit;
           result := true;
         end else
@@ -29995,7 +30077,7 @@ begin
         entry := OnlyImplementedBy.GetInterfaceEntry(typ^.IntfGuid);
         if entry=nil then
           continue;
-        Setlength(AncestorsImplementedEntry,n+1);
+        SetLength(AncestorsImplementedEntry,n+1);
         AncestorsImplementedEntry[n] := entry;
       end;
       SetLength(Ancestors,n+1);
@@ -37015,6 +37097,7 @@ begin
     fSessionData := '';
     fSessionServerTimeout := 0;
     FreeAndNil(fSessionUser);
+    fComputeSignature := TSQLRestServerAuthenticationSignedURI.ComputeSignatureCrc32;
   end;
 end;
 
@@ -37029,6 +37112,7 @@ constructor TSQLRestClientURI.Create(aModel: TSQLModel);
 begin
   inherited Create(aModel);
   fMaximumAuthentificationRetry := 1;
+  fComputeSignature := TSQLRestServerAuthenticationSignedURI.ComputeSignatureCrc32;
   fSessionID := CONST_AUTHENTICATION_NOT_USED;
   fFakeCallbacks := TSQLRestClientCallbacks.Create(self);
   {$ifdef USELOCKERDEBUG}
@@ -38052,8 +38136,8 @@ begin
   fStats := TSQLRestServerMonitor.Create(self);
   URIPagingParameters := PAGINGPARAMETERS_YAHOO;
   TAESPRNG.Main.Fill(@fSessionCounter,sizeof(fSessionCounter));
-  if fSessionCounter>cardinal(maxInt) then // ensure positive 31-bit integer
-    dec(fSessionCounter,maxInt);
+  if integer(fSessionCounter)<0 then // ensure positive 31-bit integer
+    fSessionCounter := -fSessionCounter;
   // retrieve published methods
   fPublishedMethods.InitSpecific(TypeInfo(TSQLRestServerMethods),
     fPublishedMethod,djRawUTF8,nil,true);
@@ -38976,11 +39060,11 @@ begin
     for i := 0 to high(fSessionAuthentication) do
       if fSessionAuthentication[i].ClassType=aMethod then begin
         result := fSessionAuthentication[i];
-        exit; // method already there
+        exit; // method already there -> return existing instance
       end;
     // create and initialize new authentication instance
     result := aMethod.Create(self);
-    ObjArrayAdd(fSessionAuthentication,result); // will be owned by fSessionAuthentications
+    ObjArrayAdd(fSessionAuthentication,result); // will be owned by this array
     fHandleAuthentication := true;
     // we need both AuthUser+AuthGroup tables for authentication -> create now
     fSQLAuthGroupClass := Model.AddTableInherited(TSQLAuthGroup);
@@ -39314,12 +39398,9 @@ begin
           aSession := Server.fSessionAuthentication[i].RetrieveSession(self);
           if aSession<>nil then begin
             {$ifdef WITHLOG}
-            log.Log(sllUserAuth,'%/% %',[aSession.User.LogonName,aSession.ID,
+            Log.Log(sllUserAuth,'%/% %',[aSession.User.LogonName,aSession.ID,
               aSession.RemoteIP],self);
             {$endif}
-            fSessionAccessRights := aSession.fAccessRights; // local copy
-            Call^.RestAccessRights := @fSessionAccessRights;
-            Session := aSession.IDCardinal;
             result := true;
             exit;
           end;
@@ -39349,7 +39430,7 @@ var txt: PShortString;
 begin
   txt := ToText(Reason);
   {$ifdef WITHLOG}
-  log.Log(sllUserAuth,'AuthenticationFailed(%) for % (session=%)',
+  Log.Log(sllUserAuth,'AuthenticationFailed(%) for % (session=%)',
     [txt^,Call^.Url,Session],self);
   {$endif}
   // 401 Unauthorized response MUST include a WWW-Authenticate header,
@@ -39372,7 +39453,7 @@ procedure TSQLRestServerURIContext.ExecuteCommand;
 procedure TimeOut;
 begin
   {$ifdef WITHLOG}
-  log.Log(sllServer,'TimeOut %.Execute(%) after % ms',[self,ToText(Command)^,
+  Log.Log(sllServer,'TimeOut %.Execute(%) after % ms',[self,ToText(Command)^,
     Server.fAcquireExecution[Command].LockedTimeOut],self);
   {$endif}
   if Call<>nil then
@@ -39521,13 +39602,13 @@ begin
       StatsFromContext(Stats,timeEnd,false);
       if Server.StatUsage<>nil then
         Server.StatUsage.Modified(Stats,[]);
-      if (mlSessions in Server.StatLevels) and (fAuthSession<>nil) then begin
-        if fAuthSession.Methods=nil then
-          SetLength(fAuthSession.fMethods,length(Server.fPublishedMethod));
-        sessionstat := fAuthSession.fMethods[MethodIndex];
+      if (mlSessions in Server.StatLevels) and (fSession<>nil) then begin
+        if fSession.fMethods=nil then
+          SetLength(fSession.fMethods,length(Server.fPublishedMethod));
+        sessionstat := fSession.fMethods[MethodIndex];
         if sessionstat=nil then begin
           sessionstat := TSynMonitorInputOutput.Create(Name);
-          fAuthSession.fMethods[MethodIndex] := sessionstat;
+          fSession.fMethods[MethodIndex] := sessionstat;
         end;
         StatsFromContext(sessionstat,timeEnd,true);
         // mlSessions stats are not yet tracked per Client
@@ -41495,25 +41576,25 @@ begin
 end;
 
 var
-  ServerNonceHmac: THMAC_SHA256;
+  ServerNonceHash: TSHA3; // faster than THMAC_SHA256 on small input
 
 function ServerNonce(Previous: boolean): RawUTF8;
-var Ticks: cardinal;
-    rnd: THash128;
-    hmac: THMAC_SHA256;
+var ticks: cardinal;
+    hash: TSHA3;
     res: THash256;
 begin
-  Ticks := UnixTimeUTC div (60*5); // 5 minutes resolution
+  ticks := UnixTimeUTC div (60*5); // 5 minutes resolution
   if Previous then
-    dec(Ticks);
-  while PInteger(@ServerNonceHmac)^=0 do begin
-    TAESPRNG.Main.Fill(rnd); // ensure unpredictable nonce
-    ServerNonceHmac.Init(@rnd,sizeof(rnd));
+    dec(ticks);
+  if ServerNonceHash.Algorithm<>SHA3_256 then begin
+    ServerNonceHash.Init(SHA3_256);
+    TAESPRNG.Main.Fill(@res,sizeof(res)); // ensure unpredictable nonce
+    ServerNonceHash.Update(@res,sizeof(res));
   end;
-  hmac := ServerNonceHmac;
-  hmac.Update(@Ticks,sizeof(Ticks));
-  hmac.Done(res,true);
-  result := SHA256DigestToString(res);
+  hash := ServerNonceHash; // thread-safe SHA-3 sponge reuse
+  hash.Update(@ticks,sizeof(ticks));
+  hash.Final(res,true);
+  result := BinToHex(@res,sizeof(res));
 end;
 
 procedure TSQLRestServer.SessionCreate(var User: TSQLAuthUser;
@@ -41621,27 +41702,35 @@ end;
 
 function TSQLRestServer.SessionAccess(Ctxt: TSQLRestServerURIContext): TAuthSession;
 var i: integer;
-    Tix64: Int64;
-begin // caller shall be locked via fSessions.Safe.Lock
+    tix, session: cardinal;
+    sessions: ^TAuthSession;
+begin // caller of RetrieveSession() made fSessions.Safe.Lock
   if (self<>nil) and (fSessions<>nil) then begin
-    // first check for outdated sessions to be deleted
-    Tix64 := GetTickCount64;
-    for i := fSessions.Count-1 downto 0 do
-      with TAuthSession(fSessions.List[i]) do
-        if Tix64>LastAccess64+TimeOutMS then
+    tix := GetTickCount64 shr 10;
+    if tix<>fSessionsDeprecatedTix then begin
+      fSessionsDeprecatedTix := tix; // check deprecated sessions every second
+      for i := fSessions.Count-1 downto 0 do
+        if tix>TAuthSession(fSessions.List[i]).TimeOutTix then
           SessionDelete(i,nil);
-    // retrieve session
-    for i := 0 to fSessions.Count-1 do begin
-      result := TAuthSession(fSessions.List[i]);
-      if result.IDCardinal=Ctxt.Session then begin
-        result.fLastAccess64 := Tix64; // refresh session access timestamp
-        Ctxt.fAuthSession := result;
+    end;
+    // retrieve session from its ID
+    sessions := pointer(fSessions.List);
+    session := Ctxt.Session;
+    for i := 1 to fSessions.Count do begin
+      result := sessions^;
+      if result.IDCardinal=session then begin
+        result.fTimeOutTix := tix+result.TimeoutShr10;
+        Ctxt.fSession := result; // for TSQLRestServer internal use
+        // make local copy of TAuthSession information
         Ctxt.SessionUser := result.User.fID;
         Ctxt.SessionGroup := result.User.GroupRights.fID;
         Ctxt.SessionUserName := result.User.LogonName;
         Ctxt.SessionRemoteIP := result.RemoteIP;
+        Ctxt.fSessionAccessRights := result.fAccessRights;
+        Ctxt.Call^.RestAccessRights := @Ctxt.fSessionAccessRights;
         exit;
       end;
+      inc(sessions);
     end;
   end;
   result := nil;
@@ -42860,7 +42949,12 @@ begin
   result := GetEnumName(TypeInfo(TSQLVirtualTableTransaction),ord(t));
 end;
 
-function ToText(res: TNotifyAuthenticationFailedReason): PShortString; overload;
+function ToText(a: TSQLRestServerAuthenticationSignedURIAlgo): PShortString;
+begin
+  result := GetEnumName(TypeInfo(TSQLRestServerAuthenticationSignedURIAlgo),ord(a));
+end;
+
+function ToText(res: TNotifyAuthenticationFailedReason): PShortString;
 begin
   result := GetEnumName(TypeInfo(TNotifyAuthenticationFailedReason),ord(res));
 end;
@@ -47281,7 +47375,7 @@ var i: integer;
     C1,C2: TClass;
     P1,P2: PPropInfo;
 begin
-  if (Value1=nil) or (Value2=nil) then
+  if (Value1=nil) or (Value2=nil) or (Value1=Value2) then
     result := Value1=Value2 else
   if Value1.InheritsFrom(TSQLRecord) and Value2.InheritsFrom(TSQLRecord) then
     result := TSQLRecord(Value1).SameValues(TSQLRecord(Value2)) else begin
@@ -47301,7 +47395,7 @@ begin
         P1 := P1^.Next;
       end;
       C1 := C1.ClassParent;
-    until C1=nil;
+    until C1=TObject;
     result := true;
   end;
 end;
@@ -51204,8 +51298,8 @@ end;
 
 procedure TAuthSession.ComputeProtectedValues;
 begin // here User.GroupRights and fPrivateKey should have been set
-  fLastAccess64 := GetTickCount64;
-  fTimeOutMS := User.GroupRights.SessionTimeout*(1000*60); // min to ms
+  fTimeOutShr10 := (QWord(User.GroupRights.SessionTimeout)*(1000*60))shr 10;
+  fTimeOutTix := GetTickCount64 shr 10+fTimeOutShr10;
   fAccessRights := User.GroupRights.SQLAccessRights;
   fPrivateSalt := fID+'+'+fPrivateKey;
   fPrivateSaltHash :=
@@ -51569,6 +51663,7 @@ begin
     for i := 0 to fServer.fSessions.Count-1 do
       with TAuthSession(fServer.fSessions.List[i]) do
       if (fIDCardinal=aSessionID) and (fUser.LogonName=aUserName) then begin
+        Ctxt.fSession := nil; // avoid GPF
         fServer.SessionDelete(i,Ctxt);
         Ctxt.Success;
         break;
@@ -51628,12 +51723,14 @@ procedure TSQLRestServerAuthentication.SessionCreateReturns(
   Ctxt: TSQLRestServerURIContext; Session: TAuthSession; const result, data, header: RawUTF8);
 var body: TDocVariantData;
 begin
-  body.InitFast(9,dvObject);
+  body.InitFast(10,dvObject);
   if result='' then
     body.AddValue('result',Session.IDCardinal) else
     body.AddValue('result',RawUTF8ToVariant(result));
   if data<>'' then
     body.AddValue('data',RawUTF8ToVariant(data));
+  if fAlgoName<>'' then // match e.g. TSQLRestServerAuthenticationSignedURIAlgo
+    body.AddValue('algo',RawUTF8ToVariant(fAlgoName));
   with Session.User do
     body.AddNameValuesToObject(['logonid',IDValue,'logonname',LogonName,
       'logondisplay',DisplayName,'logongroup',GroupRights.IDValue,
@@ -51646,10 +51743,12 @@ class function TSQLRestServerAuthentication.ClientGetSessionKey(
   Sender: TSQLRestClientURI; User: TSQLAuthUser; const aNameValueParameters: array of const): RawUTF8;
 var resp: RawUTF8;
     values: TPUtf8CharDynArray;
+    a: integer;
+    algo: TSQLRestServerAuthenticationSignedURIAlgo absolute a;
 begin
   if (Sender.CallBackGet('Auth',aNameValueParameters,resp)<>HTTP_SUCCESS) or
-     (JSONDecode(pointer(resp),['result','data','server','version',
-       'logonid','logonname','logondisplay','logongroup','timeout'],values)=nil) then begin
+     (JSONDecode(pointer(resp),['result','data','server','version','logonid',
+      'logonname','logondisplay','logongroup','timeout','algo'],values)=nil) then begin
     Sender.fSessionData := ''; // reset temporary 'data' field
     result := '';
   end else begin
@@ -51662,8 +51761,12 @@ begin
     User.DisplayName := values[6];
     User.GroupRights := pointer(GetInteger(values[7]));
     Sender.fSessionServerTimeout := GetInteger(values[8]);
-    if Sender.fSessionServerTimeout=0 then
+    if Sender.fSessionServerTimeout<=0 then
       Sender.fSessionServerTimeout := 60; // default 1 hour if not suppplied
+    a := GetEnumNameValueTrimmed(TypeInfo(TSQLRestServerAuthenticationSignedURIAlgo),
+      values[9],StrLen(values[9]));
+    if a>=0 then
+      Sender.fComputeSignature := TSQLRestServerAuthenticationSignedURI.GetComputeSignature(algo);
   end;
 end;
 
@@ -51735,6 +51838,7 @@ end;
 constructor TSQLRestServerAuthenticationSignedURI.Create(aServer: TSQLRestServer);
 begin
   inherited Create(aServer);
+  fComputeSignature := TSQLRestServerAuthenticationSignedURI.ComputeSignatureCrc32;
   TimeStampCoherencySeconds := 5;
 end;
 
@@ -51754,9 +51858,114 @@ begin
   fTimeStampCoherencyTicks := round(value*(1000/256)); // 256 ms resolution
 end;
 
+procedure TSQLRestServerAuthenticationSignedURI.SetAlgorithm(
+  value: TSQLRestServerAuthenticationSignedURIAlgo);
+begin
+  fComputeSignature := GetComputeSignature(value);
+  if value=suaCRC32 then
+    fAlgoName := '' else
+    fAlgoName := SynCommons.LowerCase(TrimLeftLowerCaseShort(ToText(value)));
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.GetComputeSignature(
+  algo: TSQLRestServerAuthenticationSignedURIAlgo): TSQLRestServerAuthenticationSignedURIComputeSignature;
+begin // FPC doesn't allow to use constants for procedure of object
+  case algo of
+  suaCRC32C: result := ComputeSignatureCrc32c;
+  suaXXHASH: result := ComputeSignaturexxHash;
+  suaMD5:    result := ComputeSignatureMD5;
+  suaSHA1:   result := ComputeSignatureSHA1;
+  suaSHA256: result := ComputeSignatureSHA256;
+  suaSHA512: result := ComputeSignatureSHA512;
+  else       result := ComputeSignatureCrc32;
+  end;
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.ComputeSignatureCrc32(
+  privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal;
+begin // historical algorithm
+  result := crc32(crc32(privatesalt,timestamp,8),url,urllen);
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.ComputeSignatureCrc32c(
+  privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal;
+begin // faster on SSE4.2 CPU, and slightly more secure if not cascaded
+  result := crc32c(privatesalt,timestamp,8) xor crc32c(privatesalt,url,urllen);
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.ComputeSignaturexxHash(
+  privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal;
+begin // xxHash32 has no immediate reverse function
+  result := xxHash32(privatesalt,timestamp,8) xor xxHash32(privatesalt,url,urllen);
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.ComputeSignatureMD5(
+  privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal;
+var digest: array[0..(sizeof(TMD5Digest)div 4)-1] of cardinal;
+    MD5: TMD5;
+    i: integer;
+begin
+  MD5.Init;
+  MD5.Update(privatesalt,4);
+  MD5.Update(timestamp^,8);
+  MD5.Update(url^,urllen);
+  MD5.Final(TMD5Digest(digest));
+  result := digest[0];
+  for i := 1 to high(digest) do
+    result := result xor digest[i];
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.ComputeSignatureSHA1(
+  privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal;
+var digest: array[0..(sizeof(TSHA1Digest)div 4)-1] of cardinal;
+    SHA1: TSHA1;
+    i: integer;
+begin
+  SHA1.Init;
+  SHA1.Update(@privatesalt,4);
+  SHA1.Update(timestamp,8);
+  SHA1.Update(url,urllen);
+  SHA1.Final(TSHA1Digest(digest));
+  result := digest[0];
+  for i := 1 to high(digest) do
+    result := result xor digest[i];
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.ComputeSignatureSHA256(
+  privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal;
+var digest: array[0..(sizeof(TSHA256Digest)div 4)-1] of cardinal;
+    SHA256: TSHA256;
+    i: integer;
+begin
+  SHA256.Init;
+  SHA256.Update(@privatesalt,4);
+  SHA256.Update(timestamp,8);
+  SHA256.Update(url,urllen);
+  SHA256.Final(TSHA256Digest(digest));
+  result := digest[0];
+  for i := 1 to high(digest) do
+    result := result xor digest[i];
+end;
+
+class function TSQLRestServerAuthenticationSignedURI.ComputeSignatureSHA512(
+  privatesalt: cardinal; timestamp, url: PAnsiChar; urllen: integer): cardinal;
+var digest: array[0..(sizeof(TSHA512Digest)div 4)-1] of cardinal;
+    SHA512: TSHA512;
+    i: integer;
+begin
+  SHA512.Init;
+  SHA512.Update(@privatesalt,4);
+  SHA512.Update(timestamp,8);
+  SHA512.Update(url,urllen);
+  SHA512.Final(TSHA512Digest(digest));
+  result := digest[0];
+  for i := 1 to high(digest) do
+    result := result xor digest[i];
+end;
+
 function TSQLRestServerAuthenticationSignedURI.RetrieveSession(
   Ctxt: TSQLRestServerURIContext): TAuthSession;
-var aTimeStamp, aSignature, aExpectedSignature: cardinal;
+var aTimeStamp, aSignature, aMinimalTimeStamp, aExpectedSignature: cardinal;
     PTimeStamp: PAnsiChar;
     aURLlength: Integer;
 begin
@@ -51769,10 +51978,11 @@ begin
   end;
   aURLlength := Ctxt.URISessionSignaturePos-1;
   PTimeStamp := @Ctxt.Call^.url[aURLLength+(20+8)]; // points to Hexa8(TimeStamp)
+  aMinimalTimeStamp := result.fLastTimeStamp-fTimeStampCoherencyTicks;
   if HexDisplayToCardinal(PTimeStamp,aTimeStamp) and
-     (fNoTimeStampCoherencyCheck or (result.fLastTimeStamp=0) or
-      (aTimeStamp>=result.fLastTimeStamp-fTimeStampCoherencyTicks)) then begin
-    aExpectedSignature := crc32(crc32(result.fPrivateSaltHash,PTimeStamp,8),
+     (fNoTimeStampCoherencyCheck or (integer(aMinimalTimeStamp)<0) or // <0 just after login
+      (aTimeStamp>=aMinimalTimeStamp)) then begin
+    aExpectedSignature := fComputeSignature(result.fPrivateSaltHash,PTimeStamp,
       pointer(Ctxt.Call^.url),aURLlength);
     if HexDisplayToCardinal(PTimeStamp+8,aSignature) and
        (aSignature=aExpectedSignature) then begin
@@ -51788,7 +51998,7 @@ begin
   end else begin
     {$ifdef WITHLOG}
     Ctxt.Log.Log(sllUserAuth,'Invalid TimeStamp: expected >=%, got %',
-      [result.fLastTimeStamp-fTimeStampCoherencyTicks],self);
+      [aMinimalTimeStamp,Int64(aTimeStamp)],self);
     {$endif}
   end;
   result := nil; // indicates invalid signature
@@ -51808,8 +52018,8 @@ begin
     fSessionLastTick64 := GetTickCount64;
     nonce := CardinalToHex(fSessionLastTick64 shr 8); // 256 ms resolution
     Call.url := Call.url+fSessionIDHexa8+nonce+CardinalToHex(
-      crc32(crc32(fSessionPrivateKey,Pointer(nonce),length(nonce)),
-      Pointer(blankURI),length(blankURI)));
+      Sender.fComputeSignature(fSessionPrivateKey,Pointer(nonce),
+        Pointer(blankURI),length(blankURI)));
   end;
 end;
 
@@ -51853,9 +52063,10 @@ function TSQLRestServerAuthenticationDefault.CheckPassword(Ctxt: TSQLRestServerU
 var aSalt: RawUTF8;
 begin
   aSalt := aClientNonce+User.LogonName+User.PasswordHashHexa;
-  result := (aPassWord=SHA256(fServer.Model.Root+ServerNonce(false)+aSalt)) or
-            // if current nonce failed, tries with previous 5 minutes' nonce
-            (aPassWord=SHA256(fServer.Model.Root+ServerNonce(true)+aSalt));
+  result := IsHex(aPassword,sizeof(THash256)) and
+    (IdemPropNameU(aPassWord,SHA256(fServer.Model.Root+ServerNonce(false)+aSalt)) or
+     // if current nonce failed, tries with previous 5 minutes' nonce
+     IdemPropNameU(aPassWord,SHA256(fServer.Model.Root+ServerNonce(true)+aSalt)));
 end;
 
 class function TSQLRestServerAuthenticationDefault.ClientComputeSessionKey(
@@ -52023,7 +52234,7 @@ var expectedPass: RawUTF8;
 begin
   expectedPass := User.PasswordHashHexa;
   User.PasswordPlain := aPassWord; // override with SHA-256 hash from HTTP header
-  result := User.PasswordHashHexa=expectedPass;
+  result := IdemPropNameU(User.PasswordHashHexa,expectedPass);
 end;
 
 function TSQLRestServerAuthenticationHttpBasic.Auth(Ctxt: TSQLRestServerURIContext): boolean;
@@ -53408,9 +53619,9 @@ end;
 {$endif}
 
 class function TInterfaceFactory.Get(const aGUID: TGUID): TInterfaceFactory;
-type TGUID32 = packed record a,b,c,d: integer; end; // brute force optimization
-     PGUID32 = ^TGUID32;
-var i,ga: integer;
+type TGUID32 = packed record a,b{$ifdef CPU32},c,d{$endif}: PtrInt; end;
+     PGUID32 = ^TGUID32; // brute force search optimization
+var i,ga: PtrInt;
     F: ^TInterfaceFactory;
     GUID32: TGUID32 absolute aGUID;
 begin
@@ -53420,7 +53631,7 @@ begin
     ga := GUID32.a;
     for i := 1 to InterfaceFactoryCache.Count do
     with PGUID32(@F^.fInterfaceIID)^ do
-    if (a=ga) and (b=GUID32.b) and (c=GUID32.c) and (d=GUID32.d) then begin
+    if (a=ga) and (b=GUID32.b) {$ifdef CPU32}and (c=GUID32.c) and (d=GUID32.d){$endif} then begin
       result := F^;
       InterfaceFactoryCache.Safe.UnLock;
       exit;
@@ -53466,26 +53677,34 @@ var fact: TInterfaceFactory;
 begin
   fact := Get(aGUID);
   if fact=nil then
-    raise EServiceException.CreateUTF8(
-      '%.GUID2TypeInfo(%): Interface not registered - use %.RegisterInterfaces()',
-      [self,GUIDToShort(aGUID),self]);
+    raise EServiceException.CreateUTF8('%.GUID2TypeInfo(%): Interface not '+
+      'registered - use %.RegisterInterfaces()',[self,GUIDToShort(aGUID),self]);
   result := fact.fInterfaceTypeInfo;
 end;
 
 class function TInterfaceFactory.Get(const aInterfaceName: RawUTF8): TInterfaceFactory;
 var L,i: integer;
+    F: ^TInterfaceFactory;
 begin
-  L := length(aInterfaceName);
-  if (InterfaceFactoryCache<>nil) and (L<>0) then
-    for i := 0 to InterfaceFactoryCache.Count-1 do begin
-      result := InterfaceFactoryCache.List[i];
-      if IdemPropName(result.fInterfaceTypeInfo^.Name,pointer(aInterfaceName),L) then
-        exit; // retrieved from cache
-    end;
   result := nil;
+  L := length(aInterfaceName);
+  if (InterfaceFactoryCache<>nil) and (L<>0) then begin
+    InterfaceFactoryCache.Safe.Lock;
+    try
+      F := @InterfaceFactoryCache.List[0];
+      for i := 1 to InterfaceFactoryCache.Count do
+        if IdemPropName(F^.fInterfaceTypeInfo^.Name,pointer(aInterfaceName),L) then begin
+          result := F^;
+          exit; // retrieved from cache
+        end else
+        inc(F);
+    finally
+      InterfaceFactoryCache.Safe.UnLock;
+    end;
+  end;
 end;
 
-class function TInterfaceFactory.GetUsedInterfaces: TObjectList;
+class function TInterfaceFactory.GetUsedInterfaces: TObjectListLocked;
 begin
   result := InterfaceFactoryCache;
 end;
@@ -53843,16 +54062,17 @@ end;
 function TInterfaceFactory.FindMethodIndex(const aMethodName: RawUTF8): integer;
 begin
   if (self=nil) or (aMethodName='') then
-    result := -1 else
-  if fMethodsCount<10 then begin
-    for result := 0 to fMethodsCount-1 do
-      if IdemPropNameU(fMethods[result].URI,aMethodName) then
-        exit;
-    result := -1;
-  end else
-    result := fMethod.FindHashed(aMethodName);
-  if (result<0) and (aMethodName[1]<>'_') then
-    result := FindMethodIndex('_'+aMethodName);
+    result := -1 else begin
+    if fMethodsCount<10 then begin
+      for result := 0 to fMethodsCount-1 do
+        if IdemPropNameU(fMethods[result].URI,aMethodName) then
+          exit;
+      result := -1;
+    end else
+      result := fMethod.FindHashed(aMethodName);
+    if (result<0) and (aMethodName[1]<>'_') then
+      result := FindMethodIndex('_'+aMethodName);
+  end;
 end;
 
 function TInterfaceFactory.FindFullMethodIndex(const aFullMethodName: RawUTF8;
@@ -56224,9 +56444,9 @@ var
   GlobalInterfaceResolutionLock: TRTLCriticalSection;
   GlobalInterfaceResolution: array of record
     TypeInfo: PTypeInfo;
-    ImplementationClass: TInterfacedObjectWithCustomCreateClass;
-    ImplementationInstance: TInterfacedObject;
+    ImplementationClass: TClassInstance;
     InterfaceEntry: PInterfaceEntry;
+    Instance: IInterface;
   end;
 
 class function TInterfaceResolverInjected.RegisterGlobalCheck(aInterface: PTypeInfo;
@@ -56236,29 +56456,23 @@ begin
   if (aInterface=nil) or (aImplementationClass=nil) then
     raise EInterfaceResolverException.CreateUTF8('%.RegisterGlobal(nil)',[self]);
   if aInterface^.Kind<>tkInterface then
-    raise EInterfaceResolverException.CreateUTF8(
-      '%.RegisterGlobal(%): % is not an interface',
-      [self,aInterface^.Name,aInterface^.Name]);
-  //alfchange
-  //result := aImplementationClass.GetInterfaceEntry(
-  //  PInterfaceTypeData(aInterface^.ClassType)^.IntfGuid);
+    raise EInterfaceResolverException.CreateUTF8('%.RegisterGlobal(%): % is not an interface',
+      [self,aInterface^.Name]);
   result := aImplementationClass.GetInterfaceEntry(aInterface^.InterfaceGUID^);
   if result=nil then
-    raise EInterfaceResolverException.CreateUTF8(
-      '%.RegisterGlobal(): % does not implement %',
+    raise EInterfaceResolverException.CreateUTF8('%.RegisterGlobal(): % does not implement %',
       [self,aImplementationClass,aInterface^.Name]);
   EnterCriticalSection(GlobalInterfaceResolutionLock);
   for i := 0 to length(GlobalInterfaceResolution)-1 do
     if GlobalInterfaceResolution[i].TypeInfo=aInterface then begin
       LeaveCriticalSection(GlobalInterfaceResolutionLock); // release fSafe.Lock now
-      raise EInterfaceResolverException.CreateUTF8(
-        '%.RegisterGlobal(%): % already registered',
+      raise EInterfaceResolverException.CreateUTF8('%.RegisterGlobal(%): % already registered',
         [self,aImplementationClass,aInterface^.Name]);
     end;
 end; // caller should explicitly call finally LeaveCriticalSection(...) end;
 
 class procedure TInterfaceResolverInjected.RegisterGlobal(
-  aInterface: PTypeInfo; aImplementationClass: TInterfacedObjectWithCustomCreateClass);
+  aInterface: PTypeInfo; aImplementationClass: TInterfacedObjectClass);
 var aInterfaceEntry: PInterfaceEntry;
     n: integer;
 begin
@@ -56268,7 +56482,7 @@ begin
     SetLength(GlobalInterfaceResolution,n+1);
     with GlobalInterfaceResolution[n] do begin
       TypeInfo := aInterface;
-      ImplementationClass := aImplementationClass;
+      ImplementationClass.Init(aImplementationClass);
       InterfaceEntry := aInterfaceEntry;
     end;
   finally
@@ -56286,9 +56500,10 @@ begin
     n := length(GlobalInterfaceResolution);
     SetLength(GlobalInterfaceResolution,n+1);
     with GlobalInterfaceResolution[n] do begin
+      if not GetInterfaceFromEntry(aImplementation,aInterfaceEntry,Instance) then
+        raise EInterfaceResolverException.CreateUTF8('Unexcepted %.RegisterGlobal(%,%)',
+          [self,aInterface^.Name,aImplementation]);
       TypeInfo := aInterface;
-      IInterface(aImplementation)._AddRef;
-      ImplementationInstance := aImplementation;
       InterfaceEntry := aInterfaceEntry;
     end;
   finally
@@ -56297,37 +56512,35 @@ begin
 end;
 
 class procedure TInterfaceResolverInjected.RegisterGlobalDelete(aInterface: PTypeInfo);
-var i: integer;
+var i,n: integer;
 begin
   if (aInterface=nil) or (aInterface^.Kind<>tkInterface) then
     raise EInterfaceResolverException.CreateUTF8('%.RegisterGlobalDelete(?)',[self]);
   EnterCriticalSection(GlobalInterfaceResolutionLock);
   try
-    for i := 0 to length(GlobalInterfaceResolution)-1 do
+    n := length(GlobalInterfaceResolution)-1;
+    for i := 0 to n do
       with GlobalInterfaceResolution[i] do
-      if TypeInfo=aInterface then
-        if ImplementationInstance=nil then
+      if TypeInfo=aInterface then begin
+        if Instance=nil then
           raise EInterfaceResolverException.CreateUTF8(
             '%.RegisterGlobalDelete(%) does not match an instance, but a class',
-            [self,aInterface^.Name]) else begin
-          IInterface(ImplementationInstance)._Release;
-          exit;
-        end;
+            [self,aInterface^.Name]);
+        Instance := nil; // avoid GPF
+        if n>i then
+          MoveFast(GlobalInterfaceResolution[i+1],GlobalInterfaceResolution[i],
+            (n-i)*sizeof(GlobalInterfaceResolution[i]));
+        SetLength(GlobalInterfaceResolution,n);
+        exit;
+      end;
   finally
     LeaveCriticalSection(GlobalInterfaceResolutionLock);
   end;
 end;
 
 procedure FinalizeGlobalInterfaceResolution;
-var i: Integer;
 begin
-  for i := length(GlobalInterfaceResolution)-1 downto 0 do
-    with GlobalInterfaceResolution[i] do
-      if ImplementationInstance<>nil then
-      try
-        ImplementationInstance.Free;
-      except
-      end;
+  GlobalInterfaceResolution := nil; // also cleanup Instance fields 
   DeleteCriticalSection(GlobalInterfaceResolutionLock);
 end;
 
@@ -56351,11 +56564,11 @@ begin
       for i := 0 to length(GlobalInterfaceResolution)-1 do
         with GlobalInterfaceResolution[i] do
         if TypeInfo=aInterface then
-          if ImplementationInstance<>nil then begin
-            if GetInterfaceFromEntry(ImplementationInstance,InterfaceEntry,Obj) then
-              exit;
+          if Instance<>nil then begin
+            IInterface(Obj) := Instance;
+            exit;
           end else
-            if GetInterfaceFromEntry(ImplementationClass.Create,InterfaceEntry,Obj) then
+            if GetInterfaceFromEntry(ImplementationClass.CreateNew,InterfaceEntry,Obj) then
               exit;
     finally
       LeaveCriticalSection(GlobalInterfaceResolutionLock);
@@ -56394,8 +56607,7 @@ begin
 end;
 
 procedure TInterfaceResolverInjected.InjectResolver(
-  const aOtherResolvers: array of TInterfaceResolver;
-  OwnOtherResolvers: boolean);
+  const aOtherResolvers: array of TInterfaceResolver; OwnOtherResolvers: boolean);
 var i: integer;
 begin
   for i := 0 to high(aOtherResolvers) do
@@ -56712,7 +56924,6 @@ begin
   SetLength(UID,length(aInterfaces));
   for j := 0 to high(aInterfaces) do
     UID[j] := pointer(aInterfaces[j]^.InterfaceGUID);
-    //UID[j] := @PInterfaceTypeData(aInterfaces[j]^.ClassType)^.IntfGuid;
   // check all interfaces available in aSharedImplementation/aImplementationClass
   if (aSharedImplementation<>nil) and
      aSharedImplementation.InheritsFrom(TInterfacedObjectFake) then begin
@@ -56807,9 +57018,7 @@ begin
     exit;
   if fFakeCallbacks=nil then
     fFakeCallbacks := TObjectListLocked.Create(false);
-  fFakeCallbacks.Safe.Lock;
-  fFakeCallbacks.Add(aFakeInstance);
-  fFakeCallbacks.Safe.UnLock;
+  fFakeCallbacks.SafeAdd(aFakeInstance);
 end;
 
 procedure TServiceContainerServer.FakeCallbackRemove(aFakeInstance: TObject);
@@ -57932,15 +58141,15 @@ begin
         Ctxt.StatsFromContext(stats,timeEnd,false);
         if Ctxt.Server.StatUsage<>nil then
           Ctxt.Server.StatUsage.Modified(stats,[]);
-        if (mlSessions in TSQLRestServer(Rest).StatLevels) and (Ctxt.fAuthSession<>nil) then begin
-          if Ctxt.fAuthSession.fInterfaces=nil then
-            SetLength(Ctxt.fAuthSession.fInterfaces,length(Rest.Services.fListInterfaceMethod));
+        if (mlSessions in TSQLRestServer(Rest).StatLevels) and (Ctxt.fSession<>nil) then begin
+          if Ctxt.fSession.fInterfaces=nil then
+            SetLength(Ctxt.fSession.fInterfaces,length(Rest.Services.fListInterfaceMethod));
           m := Ctxt.fServiceListInterfaceMethodIndex;
           if m<0 then
             m := Rest.Services.fListInterfaceMethods.FindHashed(
               fInterface.fMethods[Ctxt.ServiceMethodIndex].InterfaceDotMethodName);
           if m>=0 then
-          with Ctxt.fAuthSession do begin
+          with Ctxt.fSession do begin
             stats := fInterfaces[m];
             if stats=nil then begin
               stats := StatsCreate;
@@ -59429,7 +59638,8 @@ begin
   if (PCardinal(PPointer(PPointer(Instance)^)^)^=
       PCardinal(@TInterfacedObjectFake.FakeQueryInterface)^) then begin
     fake := TInterfacedObjectFake(Instance).SelfFromInterface;
-    if Assigned(fake.fInvoke) then begin // bypass all JSON marshalling
+    if Assigned(fake.fInvoke) then begin
+      // call SOA/fake interface? -> bypass all JSON marshalling
       if (output=nil) and (fMethod^.ArgsOutputValuesCount>0) then
         exit; // ensure a function has a TOnAsynchRedirectResult callback
       result := fake.fInvoke(fMethod^,params,output,nil,nil,nil);

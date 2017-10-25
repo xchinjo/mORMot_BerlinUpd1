@@ -12,7 +12,7 @@ interface
 
 uses
   SysUtils, Windows, Messages, Classes, Graphics, Controls,
-  Forms, StdCtrls, DBCtrls, DBGrids, DB, DBTables, Buttons, Grids, ExtCtrls,
+  Forms, StdCtrls, DBCtrls, DBGrids, DB,  Buttons, Grids, ExtCtrls,
   SynRestMidasVCL, DBClient,
   SynCommons, mORMot, OleCtrls, Dialogs, ExtDlgs,
   SynGdiPlus;
@@ -56,7 +56,7 @@ var
 begin
   SynRestDataset := TSynRestDataset.Create(Nil);
   SynRestDataset.DataSet.SQLModel := TSQLModel.Create([TSQLBioLife]);
-  SynRestDataset.CommandText := 'http://LocalHost:8080/root/BioLife?select=Species_No,Category,Common_Name,Species_Name,Length_cm,Length_in,Graphic,Notes,Som&sort=Species_No';
+  SynRestDataset.CommandText := 'http://LocalHost:8888/root/BioLife?select=Species_No,Category,Common_Name,Species_Name,Length_cm,Length_in,Graphic,Notes,Som&sort=Species_No';
   SynRestDataset.Open;
   SynRestDataset.AfterScroll := DoOnAfterScroll;
   DataSource1.DataSet := SynRestDataset;

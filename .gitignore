@@ -29,6 +29,7 @@
 
 # Delphi compiler-generated binaries (safe to delete)
 *.exe
+*.dll
 *.bpl
 *.bpi
 *.dcp
@@ -42,9 +43,8 @@
 *.dcu
 *.lib
 *.a
-#*.o
+*.o
 *.ocx
-*.log
 
 # FreePascal compiler
 *.com
@@ -80,3 +80,4 @@ __recovery/
 _FOSSIL_
 .svn/
 # SourceCodeRep artifact
+*.txt

@@ -38,10 +38,15 @@ var
 begin
   // define the log level
   with TSQLLog.Family do begin
-    Level := LOG_STACKTRACE;
+    Level := LOG_VERBOSE;//LOG_STACKTRACE;
     EchoToConsole := LOG_VERBOSE; // events to the console
     PerThreadLog := ptIdentifiedInOnFile;
   end;
+
+  // manual switch to console mode
+  //AllocConsole;
+  TextColor(ccLightGray); // needed to notify previous AllocConsole
+
   // create a Data Model
   aModel := TSQLModel.Create([TSQLRecordPeople]);
   try

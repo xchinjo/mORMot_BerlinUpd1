@@ -25,7 +25,6 @@ type
     fNotes: TSQLRawBlob;
     fGraphic: TSQLRawBlob;
     fSom: TSQLRawBlob;
-    fModified:TDateTime;
   published
     property Species_No: Integer read fSpecies_No write fSpecies_No;
     property Category: RawUTF8 index 15 read fCategory write fCategory;
@@ -36,7 +35,6 @@ type
     property Notes: TSQLRawBlob read fNotes write fNotes;
     property Graphic: TSQLRawBlob read fGraphic write fGraphic;
     property Som: TSQLRawBlob read fSom write fSom;
-    property Modified: TDateTime read fModified write fModified;
   end;
 
 /// an easy way to create a database model for client and server
